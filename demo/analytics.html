@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>AI26 — Traffic Analytics</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">AI26 <small>AI course project — Kochi demo</small></div>
+  <nav class="tabs">
+    <a href="index.html">Operations</a>
+    <a href="investigation.html">Investigation</a>
+    <a href="analytics.html" class="active">Analytics</a>
+    <a href="evidence.html">Evidence &amp; Alerts</a>
+    <a href="agent.html">Agent</a>
+  </nav>
+</header>
+<div class="mock-banner"><strong>Demo build.</strong> Density, OD-flow and congestion numbers are fabricated to illustrate the analytics surface — no real traffic counters behind this page.</div>
+
+<main>
+  <h1>Traffic Analytics</h1>
+
+  <div class="panel" style="margin-bottom:16px;">
+    <h2>Hourly vehicle density — last 12 hours</h2>
+    <canvas id="density-chart" height="90"></canvas>
+  </div>
+
+  <div class="grid grid-2">
+    <div class="panel">
+      <h2>Origin–destination flows (top routes)</h2>
+      <table>
+        <thead><tr><th>Origin</th><th>Destination</th><th>Trips</th><th>Dominant type</th></tr></thead>
+        <tbody id="od-body"></tbody>
+      </table>
+    </div>
+    <div class="panel">
+      <h2>Segment congestion detail</h2>
+      <table>
+        <thead><tr><th>Segment</th><th>Current</th><th>Baseline</th><th>z</th><th>Status</th></tr></thead>
+        <tbody id="cong-body"></tbody>
+      </table>
+      <p class="agent-note">Synthetic example of a segment-specific weekday/hour baseline; no baseline model is running.</p>
+    </div>
+  </div>
+</main>
+
+<footer class="pagefoot">AI26 demo — Synthetic walkthrough dataset. Not connected to live cameras or VAHAN.</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js" crossorigin="anonymous"></script>
+<script src="js/data.js"></script>
+<script>
+  const ctx = document.getElementById("density-chart");
+  const colors = ["#38d0c9", "#5b8cff", "#e0a83a"];
+  new Chart(ctx, {
+    type: "line",
+    data: {
+      labels: AI26_DATA.DENSITY_TREND.hours,
+      datasets: Object.entries(AI26_DATA.DENSITY_TREND.series).map(([name, data], i) => ({
+        label: name, data, borderColor: colors[i % colors.length],
+        backgroundColor: colors[i % colors.length] + "33",
+        tension: 0.3, fill: false, pointRadius: 2,
+      })),
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { labels: { color: "#dbe6f2" } } },
+      scales: {
+        x: { ticks: { color: "#8ea0b8" }, grid: { color: "#24334a" } },
+        y: { ticks: { color: "#8ea0b8" }, grid: { color: "#24334a" } },
+      },
+    },
+  });
+
+  const odBody = document.getElementById("od-body");
+  AI26_DATA.OD_FLOWS.forEach(f => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${f.origin}</td><td>${f.destination}</td><td>${f.count}</td><td>${f.dominant_type}</td>`;
+    odBody.appendChild(tr);
+  });
+
+  const congBody = document.getElementById("cong-body");
+  AI26_DATA.CONGESTION.forEach(c => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${c.segment}</td><td>${c.current}/hr</td><td>${c.baseline_mean !== null ? c.baseline_mean + '±' + c.baseline_stddev : '—'}</td><td>${c.z !== null ? c.z.toFixed(2) : '—'}</td><td><span class="badge badge-${c.label.replace(/\s/g,'_')}">${c.label}</span></td>`;
+    congBody.appendChild(tr);
+  });
+</script>
+</body>
+</html>

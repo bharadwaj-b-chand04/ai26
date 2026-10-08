@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>AI26 — Evidence &amp; Alerts</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">AI26 <small>AI course project — Kochi demo</small></div>
+  <nav class="tabs">
+    <a href="index.html">Operations</a>
+    <a href="investigation.html">Investigation</a>
+    <a href="analytics.html">Analytics</a>
+    <a href="evidence.html" class="active">Evidence &amp; Alerts</a>
+    <a href="agent.html">Agent</a>
+  </nav>
+</header>
+<div class="mock-banner"><strong>Demo build.</strong> Acknowledge is a local UI toggle only. "Export" renders a mock evidence report in-page — no PDF, no hash, no audit log actually written.</div>
+
+<main>
+  <h1>Evidence &amp; Alerts</h1>
+
+  <div class="grid grid-2">
+    <div class="panel">
+      <h2>Alert queue</h2>
+      <div id="alert-list"></div>
+    </div>
+    <div class="panel">
+      <h2>Evidence export</h2>
+      <div class="query-row">
+        <input type="text" id="evidence-plate" placeholder="Plate, e.g. KL01XY9999">
+        <button id="evidence-btn">Generate</button>
+      </div>
+      <div class="chips" id="evidence-chips"></div>
+      <div id="evidence-output"></div>
+    </div>
+  </div>
+</main>
+
+<footer class="pagefoot">AI26 demo — Synthetic walkthrough dataset. Not connected to live cameras or VAHAN.</footer>
+
+<script src="js/data.js"></script>
+<script>
+  const listEl = document.getElementById("alert-list");
+  function renderAlerts() {
+    listEl.innerHTML = "";
+    AI26_DATA.ALERTS.slice().sort((a,b) => b.ts.localeCompare(a.ts)).forEach(a => {
+      const cam = AI26_DATA.cameraById(a.camera_id);
+      const div = document.createElement("div");
+      div.className = `alert-item sev-${a.severity}`;
+      div.innerHTML = `
+        <div class="top">
+          <span class="mono">${a.ts}</span>
+          <span class="badge badge-sev-${a.severity}">${a.severity}</span>
+        </div>
+        <div class="msg">${a.message}</div>
+        <div class="detail">${a.detail}</div>
+        <div class="detail">${cam.name} · ${a.type.replace(/_/g," ")}</div>
+        <div style="margin-top:6px;">
+          <button class="secondary ack-btn" data-id="${a.id}" ${a.ack ? "disabled" : ""}>
+            ${a.ack ? "Acknowledged" : "Acknowledge"}
+          </button>
+          <a class="btn secondary" style="text-decoration:none; display:inline-block;" href="investigation.html?plate=${a.plate}">View trajectory</a>
+        </div>`;
+      listEl.appendChild(div);
+    });
+    document.querySelectorAll(".ack-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const alert = AI26_DATA.ALERTS.find(a => a.id === btn.dataset.id);
+        alert.ack = true;
+        renderAlerts();
+      });
+    });
+  }
+  renderAlerts();
+
+  const evOut = document.getElementById("evidence-output");
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+  function generateEvidence(plate) {
+    const traj = AI26_DATA.TRAJECTORIES[plate];
+    if (!traj) {
+      evOut.innerHTML = `<p class="agent-empty">No trajectory for "${escapeHtml(plate)}" in this demo dataset. Try: ${Object.keys(AI26_DATA.TRAJECTORIES).join(", ")}.</p>`;
+      return;
+    }
+    const vehicle = AI26_DATA.VEHICLES[plate];
+    const hash = "sha256:" + Array.from(plate).reduce((h,c) => ((h<<5)-h+c.charCodeAt(0))|0, 0).toString(16).padStart(8,"0") + "…(mock)";
+    const rows = traj.hops.map(h => {
+      const cam = AI26_DATA.cameraById(h.camera_id);
+      return `<tr><td class="mono">${h.ts}</td><td>${cam.name}</td><td>${cam.road_segment}</td><td><span class="badge badge-${h.state}">${h.state}</span></td></tr>`;
+    }).join("");
+    evOut.innerHTML = `
+      <div class="panel" style="background:var(--panel-2); margin-top:10px;">
+        <h3>Evidence timeline — ${escapeHtml(plate)}</h3>
+        <p>${vehicle.color} ${vehicle.type} ${vehicle.blacklisted ? `— <span class="badge badge-sev-high">BLACKLISTED</span> ${vehicle.reason}` : ""}</p>
+        <table><thead><tr><th>Time</th><th>Camera</th><th>Segment</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>
+        ${traj.rejected.length ? `<p class="agent-note">Rejected candidate hops: ${traj.rejected.map(r=>r.reason).join("; ")}</p>` : ""}
+        <p class="agent-note">Generated ${new Date().toISOString()} · package hash ${hash} · expires per retention policy (mocked, not enforced in this demo)</p>
+      </div>`;
+  }
+  document.getElementById("evidence-btn").addEventListener("click", () =>
+    generateEvidence(document.getElementById("evidence-plate").value.trim().toUpperCase()));
+  document.getElementById("evidence-plate").addEventListener("keydown", e => { if (e.key === "Enter") document.getElementById("evidence-btn").click(); });
+
+  const evChips = document.getElementById("evidence-chips");
+  Object.keys(AI26_DATA.TRAJECTORIES).forEach(p => {
+    const chip = document.createElement("span");
+    chip.className = "chip"; chip.textContent = p;
+    chip.onclick = () => { document.getElementById("evidence-plate").value = p; generateEvidence(p); };
+    evChips.appendChild(chip);
+  });
+</script>
+</body>
+</html>

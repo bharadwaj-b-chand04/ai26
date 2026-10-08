@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>AI26 — Operations Overview</title>
+<link rel="stylesheet" href="css/style.css">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">AI26 <small>AI course project — Kochi demo</small></div>
+  <nav class="tabs">
+    <a href="index.html" class="active">Operations</a>
+    <a href="investigation.html">Investigation</a>
+    <a href="analytics.html">Analytics</a>
+    <a href="evidence.html">Evidence &amp; Alerts</a>
+    <a href="agent.html">Agent</a>
+  </nav>
+</header>
+<div class="mock-banner"><strong>Demo build.</strong> Map, camera network and geography are real (Kochi). Video feeds, plates, alerts and analytics are fabricated mock data — see <code>demo/README.md</code>.</div>
+
+<main>
+  <h1>Operations Overview</h1>
+
+  <div class="stat-row" id="stat-row"></div>
+
+  <div class="grid grid-main-side">
+    <div class="panel">
+      <h2>City map — 10 camera nodes, Kochi</h2>
+      <div id="map"></div>
+    </div>
+    <div class="panel">
+      <h2>Live alert feed</h2>
+      <div id="alert-feed"></div>
+      <p class="agent-note"><a href="evidence.html">Full alert &amp; evidence view →</a></p>
+    </div>
+  </div>
+
+  <div class="grid grid-2" style="margin-top:16px;">
+    <div class="panel">
+      <h2>Segment congestion (now vs. weekday/hour baseline)</h2>
+      <table>
+        <thead><tr><th>Segment</th><th>Current</th><th>Baseline</th><th>z-score</th><th>Status</th></tr></thead>
+        <tbody id="congestion-body"></tbody>
+      </table>
+    </div>
+    <div class="panel">
+      <h2>Camera health</h2>
+      <table>
+        <thead><tr><th>Camera</th><th>Road segment</th><th>FPS</th><th>Last seen</th><th>Status</th></tr></thead>
+        <tbody id="camera-health-body"></tbody>
+      </table>
+    </div>
+  </div>
+</main>
+
+<footer class="pagefoot">AI26 demo — Synthetic walkthrough dataset. Not connected to live cameras or VAHAN.</footer>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+  integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="js/data.js"></script>
+<script>
+  // --- stat row ---
+  const statRow = document.getElementById("stat-row");
+  const onlineCams = AI26_DATA.CAMERAS.filter(c => c.status === "online").length;
+  const openAlerts = AI26_DATA.ALERTS.filter(a => !a.ack).length;
+  const events24h = AI26_DATA.OBSERVATIONS.length;
+  const blacklistHits = AI26_DATA.ALERTS.filter(a => a.type === "blacklist").length;
+  [
+    ["Cameras online", `${onlineCams}/${AI26_DATA.CAMERAS.length}`],
+    ["Open alerts", openAlerts],
+    ["Observations (session)", events24h],
+    ["Blacklist hits today", blacklistHits],
+  ].forEach(([label, value]) => {
+    const div = document.createElement("div");
+    div.className = "stat-card";
+    div.innerHTML = `<div class="value">${value}</div><div class="label">${label}</div>`;
+    statRow.appendChild(div);
+  });
+
+  // --- map ---
+  const map = L.map("map", { scrollWheelZoom: false }).setView([9.99, 76.30], 12);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution: '&copy; OpenStreetMap contributors',
+    maxZoom: 19,
+  }).addTo(map);
+
+  AI26_DATA.CAMERAS.forEach(cam => {
+    const color = cam.status === "online" ? "#38c96a" : "#e0a83a";
+    const marker = L.circleMarker([cam.lat, cam.lng], {
+      radius: 8, color, fillColor: color, fillOpacity: 0.85, weight: 2,
+    }).addTo(map);
+    marker.bindPopup(`<strong>${cam.name}</strong><br>${cam.road_segment}<br>Status: ${cam.status} · ${cam.fps} fps<br><a href="investigation.html?camera=${cam.id}">Open in Investigation →</a>`);
+  });
+
+  // --- alert feed ---
+  const feed = document.getElementById("alert-feed");
+  AI26_DATA.ALERTS.slice().sort((a,b) => b.ts.localeCompare(a.ts)).forEach(a => {
+    const cam = AI26_DATA.cameraById(a.camera_id);
+    const div = document.createElement("div");
+    div.className = `alert-item sev-${a.severity}`;
+    div.innerHTML = `
+      <div class="top"><span class="mono">${a.ts}</span><span class="badge badge-sev-${a.severity}">${a.severity}</span></div>
+      <div class="msg">${a.message}</div>
+      <div class="detail">${cam.name} · ${a.ack ? "acknowledged" : "unacknowledged"}</div>`;
+    feed.appendChild(div);
+  });
+
+  // --- congestion table ---
+  const congBody = document.getElementById("congestion-body");
+  AI26_DATA.CONGESTION.forEach(c => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${c.segment}</td><td>${c.current}/hr</td><td>${c.baseline_mean !== null ? c.baseline_mean + '±' + c.baseline_stddev : '—'}</td><td>${c.z !== null ? c.z.toFixed(2) : '—'}</td><td><span class="badge badge-${c.label.replace(/\s/g,'_')}">${c.label}</span></td>`;
+    congBody.appendChild(tr);
+  });
+
+  // --- camera health table ---
+  const camBody = document.getElementById("camera-health-body");
+  AI26_DATA.CAMERAS.forEach(c => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${c.name}</td><td>${c.road_segment}</td><td>${c.fps}</td><td class="mono">${c.last_seen}</td><td><span class="badge badge-${c.status}">${c.status}</span></td>`;
+    camBody.appendChild(tr);
+  });
+</script>
+</body>
+</html>

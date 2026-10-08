@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>AI26 — Agent</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">AI26 <small>AI course project — Kochi demo</small></div>
+  <nav class="tabs">
+    <a href="index.html">Operations</a>
+    <a href="investigation.html">Investigation</a>
+    <a href="analytics.html">Analytics</a>
+    <a href="evidence.html">Evidence &amp; Alerts</a>
+    <a href="agent.html" class="active">Agent</a>
+  </nav>
+</header>
+<div class="mock-banner"><strong>Demo build.</strong> No LLM runs here. This is a hardcoded tool-call simulator illustrating a possible extension: a local model with a fixed, allowlisted, read-only tool list. Every response below shows which tool it "called" and with what arguments.</div>
+
+<main>
+  <h1>AI26 Agent</h1>
+  <p class="agent-note">Unlike the camera-wall search (scoped to cameras you select), this agent can reach across the whole allowlisted tool surface — trajectories, alerts, congestion, camera events, OD flows — the same way the real NL-query layer would, just with canned answers instead of a live model and database.</p>
+
+  <div class="panel">
+    <div class="agent-chat" id="chat"></div>
+    <div class="query-row" style="margin-top:14px;">
+      <input type="text" id="agent-input" placeholder="Ask AI26 something…">
+      <button id="agent-send">Send</button>
+    </div>
+    <div class="chips" id="agent-chips"></div>
+  </div>
+
+  <div class="panel" style="margin-top:16px;">
+    <h2>Allowlisted tools (mocked)</h2>
+    <table>
+      <thead><tr><th>Tool</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">find_trajectory(plate)</td><td>Chronological cross-camera path for one plate</td></tr>
+        <tr><td class="mono">get_alerts(type?, plate?)</td><td>Blacklist / impossible-travel / loitering / restricted-zone alerts</td></tr>
+        <tr><td class="mono">get_congestion(segment)</td><td>Current count vs. weekday/hour baseline, z-score</td></tr>
+        <tr><td class="mono">list_camera_events(camera_id, window)</td><td>Recent observations at one camera</td></tr>
+        <tr><td class="mono">get_od_flows()</td><td>Top origin–destination routes</td></tr>
+      </tbody>
+    </table>
+    <p class="agent-note">Potential extension: validated arguments, a read-only database role, result limits, and a query log; these are not implemented here. Anything off this list gets refused, not guessed.</p>
+  </div>
+</main>
+
+<footer class="pagefoot">AI26 demo — Synthetic walkthrough dataset. Not connected to live cameras or VAHAN.</footer>
+
+<script src="js/data.js"></script>
+<script src="js/agent.js"></script>
+<script>
+  const chat = document.getElementById("chat");
+
+  function addUserMsg(text) {
+    const div = document.createElement("div");
+    div.className = "agent-msg user";
+    div.textContent = text;
+    chat.appendChild(div);
+  }
+
+  function addAgentMsg(result) {
+    const div = document.createElement("div");
+    div.className = "agent-msg agent";
+    const toolHtml = result.toolCall
+      ? `<div class="tool-call">→ ${result.toolCall.tool}(${Object.entries(result.toolCall.args).map(([k,v]) => `${k}="${v}"`).join(", ")})</div>`
+      : "";
+    div.innerHTML = toolHtml + result.html;
+    chat.appendChild(div);
+    chat.scrollTop = chat.scrollHeight;
+  }
+
+  function ask(text) {
+    if (!text.trim()) return;
+    addUserMsg(text);
+    const result = AI26_AGENT.ask(text);
+    setTimeout(() => addAgentMsg(result), 200); // small delay so the tool-call line reads as a step, not instant text
+  }
+
+  document.getElementById("agent-send").addEventListener("click", () => {
+    const input = document.getElementById("agent-input");
+    ask(input.value);
+    input.value = "";
+  });
+  document.getElementById("agent-input").addEventListener("keydown", e => {
+    if (e.key === "Enter") document.getElementById("agent-send").click();
+  });
+
+  const chipWrap = document.getElementById("agent-chips");
+  AI26_AGENT.SAMPLE_QUESTIONS.forEach(q => {
+    const chip = document.createElement("span");
+    chip.className = "chip"; chip.textContent = q;
+    chip.onclick = () => ask(q);
+    chipWrap.appendChild(chip);
+  });
+
+  addAgentMsg({ toolCall: null, html: "<p>Hi — I'm the AI26 agent (demo). Ask about a plate's trajectory, alerts, congestion, camera events, or OD routes. Try one of the sample prompts below.</p>" });
+</script>
+</body>
+</html>

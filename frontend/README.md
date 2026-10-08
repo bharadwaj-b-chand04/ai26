@@ -1,0 +1,13 @@
+# AI26 frontend
+
+React + TypeScript interface for the AI26 vehicle analytics project.
+
+```bash
+npm ci
+npm run dev
+```
+
+Default URL: http://localhost:5174. The development server proxies `/api` to
+http://127.0.0.1:8001. See [RUN.md](../RUN.md) for environment variables and
+backend setup. `npm run build` checks TypeScript and creates `dist/`;
+`npm run lint` runs Oxlint. Production hosting must route `/api` to the backend.
