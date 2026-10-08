@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+*.py[cod]
+node_modules/
+dist/
+*.log
+.DS_Store
+backend/data/
+backend/static/playback/CAM-0[789].mp4

@@ -1,0 +1,18 @@
+[project]
+name = "ai26-backend"
+version = "0.1.0"
+description = "AI26 demo backend (YOLO + Fast-ALPR inference)"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "ultralytics",
+    "fast-alpr",
+    "opencv-python",
+    "python-multipart",
+    "requests",
+    "onnxruntime",
+]
+
+[tool.uv]
+package = false

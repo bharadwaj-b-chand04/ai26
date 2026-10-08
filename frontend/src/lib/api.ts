@@ -1,0 +1,140 @@
+export interface Camera {
+  id: string
+  kind: "vehicle" | "plate"
+  location: string
+  location_confirmed: boolean
+  lat: number
+  lon: number
+}
+
+export interface DetectionEvent {
+  camera_id: string
+  kind: "vehicle" | "plate"
+  label?: string
+  plate?: string
+  plate_norm?: string
+  plate_raw?: string
+  format_valid?: boolean
+  repairs?: string[]
+  confidence: number
+  bbox: [number, number, number, number]
+  ts: number
+}
+
+export interface Alert {
+  severity: "info" | "warning" | "critical"
+  type: string
+  summary: string
+  detail: string
+  ts: number
+}
+
+export interface Stats {
+  total_events: number
+  events_last_minute: number
+  per_camera: Record<string, number>
+  busiest_camera: string | null
+  avg_confidence: number
+}
+
+export interface TrajectoryHop {
+  camera_id: string
+  location: string
+  location_confirmed: boolean
+  lat: number
+  lon: number
+  ts: number
+  confidence: number
+  plate?: string
+  plate_raw?: string
+  repairs: string[]
+  bbox?: [number, number, number, number]
+}
+
+export interface TrajectoryLink {
+  from_camera_id: string
+  to_camera_id: string
+  from_ts: number
+  to_ts: number
+  distance_km: number
+  elapsed_seconds: number
+  implied_speed_kmh: number
+  reason?: string
+}
+
+export interface Trajectory {
+  mode: "live"
+  status: "not_found" | "observed" | "confirmed" | "cloning_candidate"
+  plate: string
+  observations: TrajectoryHop[]
+  accepted_links: TrajectoryLink[]
+  rejected_links: TrajectoryLink[]
+}
+
+export interface EvidenceReport {
+  report_id: string
+  generated_at: number
+  retention: string
+  package_hash: string
+  trajectory: Trajectory
+}
+
+async function requestJson<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
+  const response = await fetch(input, init)
+  if (!response.ok) throw new Error(`Request failed (${response.status})`)
+  return response.json() as Promise<T>
+}
+
+export async function getCameras(): Promise<Camera[]> {
+  return requestJson<Camera[]>("/api/cameras")
+}
+
+export async function getEvents(params: { camera?: string; plate?: string } = {}): Promise<DetectionEvent[]> {
+  const q = new URLSearchParams(params as Record<string, string>).toString()
+  return requestJson<DetectionEvent[]>(`/api/events${q ? `?${q}` : ""}`)
+}
+
+export async function getAlerts(): Promise<Alert[]> {
+  return requestJson<Alert[]>("/api/alerts")
+}
+
+export async function getStats(): Promise<Stats> {
+  return requestJson<Stats>("/api/stats")
+}
+
+export async function askNL(question: string): Promise<{ text: string; sql?: string }> {
+  return requestJson<{ text: string; sql?: string }>("/api/nlquery", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ question }),
+  })
+}
+
+export async function getTrajectory(plate: string): Promise<Trajectory> {
+  return requestJson<Trajectory>(`/api/trajectory/${encodeURIComponent(plate)}`)
+}
+
+export async function createEvidenceReport(plate: string): Promise<EvidenceReport> {
+  return requestJson<EvidenceReport>(`/api/evidence/${encodeURIComponent(plate)}`, { method: "POST" })
+}
+
+export function streamUrl(cameraId: string, startAt?: number, retry = 0, anchorAt?: number) {
+  const params = new URLSearchParams({ retry: String(retry) })
+  if (startAt !== undefined) params.set("start", startAt.toFixed(3))
+  if (anchorAt !== undefined) params.set("anchor", anchorAt.toFixed(3))
+  return `/api/stream/${cameraId}?${params}`
+}
+
+export function videoUrl(cameraId: string) {
+  return `/api/video/${cameraId}`
+}
+
+export function cameraPlaybackOffset(cameraId: string, duration: number, now = Date.now()) {
+  const cameraNumber = Number(cameraId.match(/\d+$/)?.[0] ?? 0)
+  const cycle = Math.max(duration - 0.5, 0.5)
+  return (now / 1000 + cameraNumber * 4.5) % cycle
+}
+
+export function snapshotUrl(cameraId: string) {
+  return `/api/snapshot/${cameraId}?t=${Date.now()}`
+}
