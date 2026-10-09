@@ -23,9 +23,10 @@ CPU PyTorch on Linux. After the first installation, restart with
 
 ## Working functionality
 
-- YOLO detections, baseline local centroid tracks, and shared annotated feeds.
+- YOLO detections, local motion/box association with ambiguity abstention, and shared annotated feeds.
 - SQLite observations, replay sessions, deduplicated passages, review history,
-  local rules, report snapshots, and audit records that survive API restart.
+  local rules, versioned camera metadata, queried journey decisions, report snapshots,
+  and audit records that survive API restart.
 - Per-camera/per-track OCR consensus with abstention on conflicting reads;
   raw, failed, and canonical OCR reads remain separate.
 - True empty investigations, explicit walkthrough selection, time filters, and
@@ -41,10 +42,10 @@ CPU PyTorch on Linux. After the first installation, restart with
 ## Limits and remaining work
 
 Recorded clips have replay timestamps, not synchronized original capture times.
-Their cross-camera links remain unresolved candidates. Centroid tracking and OCR
+Their cross-camera links remain unresolved candidates. Heuristic local tracking and OCR
 are not validated identity systems; passage counts are camera-local sampled
 counts, not unique vehicles across the city. Occupancy, calibrated speed,
-historical congestion, fuzzy plate linking, stronger tracking, held-out accuracy
+historical congestion, fuzzy plate linking, learned appearance tracking, held-out accuracy
 measurements, production access controls, and optional weather restoration are
 pending. A hash detects changes to a report; it is not a digital signature.
 
@@ -59,4 +60,8 @@ investigations never receive its observations automatically.
 | `tests/` | Deterministic backend regression and contract tests |
 | `docs/IMPLEMENTATION.md` | Data contracts, architecture and current limits |
 | `docs/PROGRESS.md` | Full implementation checklist with completion evidence |
+| `docs/PERSISTENCE.md` | Camera revision and stored journey decision API |
 | `docs/IMPORT.md` | Import provenance and separation from the SIH project |
+
+Camera metadata revisions and queried journey-link history are durable in schema 3.
+See [persistence API and limitations](docs/PERSISTENCE.md).

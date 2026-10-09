@@ -49,3 +49,13 @@ class RuleConfig(BaseModel):
     watchlist: dict[str, str] = Field(default_factory=dict)
     restricted_cameras: list[str] = Field(default_factory=list)
     dwell_zones: list[ZoneRule] = Field(default_factory=list)
+
+class CameraConfigurationUpdate(BaseModel):
+    model_config = ConfigDict(extra='forbid', allow_inf_nan=False, str_strip_whitespace=True)
+    expected_revision: int = Field(ge=1, strict=True)
+    location: StrictStr = Field(min_length=1, max_length=200)
+    location_confirmed: bool = Field(strict=True)
+    lat: float = Field(ge=-90, le=90)
+    lon: float = Field(ge=-180, le=180)
+    reviewer: StrictStr = Field(min_length=1, max_length=100)
+    reason: StrictStr = Field(min_length=1, max_length=1000)

@@ -29,11 +29,13 @@
 
 `schemas.py` validates finite timestamps/confidence, ordered boxes, query strings
 and rule configuration. Invalid requests return a consistent JSON error envelope.
-SQLite schema version 2 has sessions, observations, passages, alerts, reports,
-settings, audit and report artifact leases. Version-1 reports migrate with their
-leases; unknown future versions fail rather than silently open.
-The camera catalog is still code configuration and journey links are derived,
-not independently migrated persistent models. The repository is intended for a
+SQLite schema version 3 has sessions, observations, passages, alerts, reports,
+settings, audit, report artifact leases, camera revisions and immutable queried
+journey-link decisions. Version-1 reports migrate with their leases; version-2
+data migrates with a seeded catalog and link storage. Unknown future versions fail.
+New observations retain camera metadata snapshots. Legacy reads explicitly use
+current-catalog fallback. See [persistence contracts](PERSISTENCE.md) for API edits,
+version history and limits. The repository is intended for a
 single local API process, not a distributed ingestion deployment.
 
 A read ID identifies an immutable model observation. A passage ID combines camera,
@@ -46,8 +48,9 @@ not inherit that limit. Default windows expire at read time even if no data arri
 `ts` is replay observation time; `source_time_seconds` is position in the clip;
 `processed_at` is the processing completion time. Original capture timestamps are
 unknown. Cross-camera replay clocks cannot support physical travel-time inference.
-Those links remain unresolved candidates. For supplied calibrated observations,
-the baseline uses exact plate equality and a fixed straight-line speed gate;
+Those links remain unresolved candidates. For manual observations with confirmed
+location labels, the baseline uses exact plate equality and a fixed straight-line
+speed gate; coordinate and clock validation are not established by this status;
 accepted links still do not prove identity. Rejected links and mixed routes require
 review, with null speed for equal/nonpositive timestamps.
 
@@ -55,7 +58,9 @@ review, with null speed for equal/nonpositive timestamps.
 
 | Method | Route | Output |
 | --- | --- | --- |
-| GET | `/api/cameras`, `/api/health` | Catalog availability and actual processor health |
+| GET | `/api/cameras`, `/api/health` | Persisted catalog, availability and actual processor health |
+| GET / PUT | `/api/cameras/{camera}/configuration` | Current/historical metadata or audited revision update with stale-edit protection |
+| GET | `/api/journey-links` | Stored queried decision history; plate/arrival-time filters and bounded limit |
 | GET | `/api/video/{camera}`, `/api/stream/{camera}` | MP4 playback / shared annotated MJPEG |
 | GET | `/api/preview/{camera}` | Cached 320-pixel sampled JPEG; ETag / 304; missing 404 or unready 503 |
 | GET | `/api/snapshot/{camera}` | Fresh annotated JPEG; 404 missing or 503 not ready |

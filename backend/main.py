@@ -13,11 +13,11 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 
-from cameras import CAMERAS, CAMERAS_BY_ID, camera_playback_source, camera_source
+from cameras import CAMERAS_BY_ID, camera_playback_source, camera_source
 from events import derive_alerts, evidence_report, flows, get_events, get_trajectory, stats, store
 from nlquery import answer as nl_answer
 from processing import processor
-from schemas import QueryRequest, ReviewRequest, RuleConfig
+from schemas import QueryRequest, ReviewRequest, RuleConfig, CameraConfigurationUpdate
 from stream import mjpeg_generator, snapshot_frame
 from plate_format import normalize_plate
 from repository import canonical_json
@@ -69,8 +69,28 @@ def interval(since,until):
 @app.get('/api/cameras')
 def list_cameras():
     health={s['camera_id']:s for s in processor.health()}
-    return [{**{k:v for k,v in c.items() if k!='path'},'source_available':camera_source(c['id']).is_file(),
-             'health':health[c['id']]} for c in CAMERAS]
+    return [{**c,'source_available':camera_source(c['id']).is_file(),
+             'health':health[c['id']]} for c in store.camera_catalog()]
+
+@app.get('/api/cameras/{camera_id}/configuration')
+def camera_configuration(camera_id:str, revision:Annotated[int|None,Query(ge=1)]=None):
+    check_camera(camera_id)
+    config=store.camera_configuration(camera_id,revision)
+    if config is None: raise HTTPException(404,'Camera configuration revision unavailable')
+    return config
+
+@app.put('/api/cameras/{camera_id}/configuration')
+def update_camera_configuration(camera_id:str, body:CameraConfigurationUpdate):
+    check_camera(camera_id)
+    try: return store.update_camera(camera_id,body.model_dump(),time.time())
+    except ValueError as exc: raise HTTPException(409,str(exc)) from exc
+
+@app.get('/api/journey-links')
+def journey_links(plate:str|None=None,since:TimeFilter=None,until:TimeFilter=None,
+                  limit:Annotated[int,Query(ge=1,le=5000)]=5000):
+    interval(since,until)
+    if plate: plate=check_plate(plate)
+    return store.journey_links(plate,0 if since is None else since,until,limit)
 
 @app.get('/api/health')
 def health():

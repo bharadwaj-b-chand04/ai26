@@ -3,6 +3,7 @@ import hashlib
 import json
 import sqlite3
 import threading
+import time
 from pathlib import Path
 
 
@@ -20,7 +21,7 @@ class Repository:
         self.db.row_factory = sqlite3.Row
         self.db.execute('PRAGMA journal_mode=WAL')
         version = self.db.execute('PRAGMA user_version').fetchone()[0]
-        if version > 2:
+        if version > 3:
             self.db.close()
             raise RuntimeError('Database version is newer than this application')
         with self.db:
@@ -46,7 +47,78 @@ class Repository:
                         FROM reports,json_each(reports.data,'$.artifacts') a;
                     PRAGMA user_version=2;
                 ''')
-        self.schema_version = 2
+            if version < 3:
+                self.db.executescript('''
+                    BEGIN IMMEDIATE;
+                    CREATE TABLE camera_catalog(camera TEXT, revision INTEGER, data TEXT, PRIMARY KEY(camera,revision));
+                    CREATE TABLE journey_links(id TEXT PRIMARY KEY, plate TEXT, from_ts REAL, to_ts REAL, data TEXT);
+                    CREATE INDEX journey_link_time ON journey_links(to_ts);
+                    CREATE INDEX journey_link_plate_time ON journey_links(plate,to_ts);
+                    PRAGMA user_version=3;
+                    COMMIT;
+                ''')
+        self.schema_version = 3
+        # Seed only missing IDs. Restart never overwrites operator metadata or its history.
+        from cameras import CAMERAS
+        with self.lock, self.db:
+            for camera in CAMERAS:
+                config = {k:v for k,v in camera.items() if k != 'path'}
+                config.update(revision=1, metadata_source='repository defaults',
+                              calibration_status='unverified', updated_at=0)
+                self.db.execute('INSERT OR IGNORE INTO camera_catalog VALUES(?,?,?)',
+                                (camera['id'], 1, canonical_json(config)))
+
+    def camera_catalog(self):
+        with self.lock:
+            rows = self.db.execute('''SELECT data FROM camera_catalog c WHERE revision=(
+                SELECT max(revision) FROM camera_catalog WHERE camera=c.camera) ORDER BY camera''').fetchall()
+        return [json.loads(r[0]) for r in rows]
+
+    def camera_configuration(self, camera, revision=None):
+        with self.lock:
+            row = self.db.execute('SELECT data FROM camera_catalog WHERE camera=? AND (? IS NULL OR revision=?) ORDER BY revision DESC LIMIT 1',
+                                  (camera,revision,revision)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def update_camera(self, camera, change, now):
+        # SQL transaction plus compare-and-swap protects against concurrent editors/connections.
+        with self.lock, self.db:
+            self.db.execute('BEGIN IMMEDIATE')
+            previous = self.camera_configuration(camera)
+            if previous is None: raise ValueError('Unknown camera')
+            if previous['revision'] != change['expected_revision']:
+                raise ValueError('Camera configuration changed; reload before saving')
+            config = {**previous, **{k:change[k] for k in ('location','lat','lon','location_confirmed')},
+                      'revision':previous['revision']+1, 'updated_at':now,
+                      'metadata_source':'local operator entry; calibration unverified'}
+            self.db.execute('INSERT INTO camera_catalog VALUES(?,?,?)', (camera,config['revision'],canonical_json(config)))
+            self.db.execute('INSERT INTO audit(ts,action,subject,data) VALUES(?,?,?,?)',
+                            (now,'camera_configuration',camera,canonical_json({'revision':config['revision'],
+                              'reviewer':change['reviewer'],'reason':change['reason']})))
+        return config
+
+    def put_journey_links(self, plate, trajectory):
+        """Materialize immutable decisions idempotently; polling the same route adds no rows."""
+        result = {}
+        with self.lock, self.db:
+            for key, status in [('accepted_links','accepted'),('rejected_links','rejected'),('candidate_links','candidate')]:
+                result[key] = []
+                for link in trajectory[key]:
+                    decision = {**link, 'plate':plate, 'decision_status':status}
+                    link_id = hashlib.sha256(canonical_json(decision).encode()).hexdigest()[:32]
+                    decision['link_id'] = link_id
+                    self.db.execute('INSERT OR IGNORE INTO journey_links VALUES(?,?,?,?,?)',
+                                    (link_id,plate,link['from_ts'],link['to_ts'],canonical_json(decision)))
+                    result[key].append(decision)
+        return {**trajectory, **result}
+
+    def journey_links(self, plate=None, since=0, until=None, limit=5000):
+        clauses = ['to_ts>=?', 'to_ts<=?']; args = [since,time.time() if until is None else until]
+        if plate is not None: clauses.append('plate=?'); args.append(plate)
+        with self.lock:
+            rows = self.db.execute('SELECT data FROM journey_links WHERE '+' AND '.join(clauses)+
+                                   ' ORDER BY to_ts DESC,id DESC LIMIT ?', [*args,limit]).fetchall()
+        return [json.loads(r[0]) for r in rows]
 
     def start_session(self, session):
         with self.lock, self.db:
@@ -232,6 +304,7 @@ class Repository:
         with self.lock, self.db:
             self.db.execute('DELETE FROM observations WHERE ts<?', (cutoff,))
             self.db.execute('DELETE FROM passages WHERE last<?', (cutoff,))
+            self.db.execute('DELETE FROM journey_links WHERE to_ts<?', (cutoff,))
             self.db.execute('DELETE FROM artifact_leases WHERE expires<=?', (now,))
             self.db.execute('DELETE FROM reports WHERE expires<=?', (now,))
             self.db.execute('DELETE FROM alerts WHERE ts<?', (cutoff,))

@@ -17,16 +17,24 @@ WINDOW_SECONDS = 300
 MAX_TRAVEL_SPEED_KMH = 160
 RETENTION_SECONDS = 7 * 86400
 REPORT_RETENTION_SECONDS = 86400
+LINK_ALGORITHM_VERSION = 'exact-plate-baseline-v2'
 store = Repository(Path(os.environ.get('AI26_DATA_ROOT', Path(__file__).parent / 'data')) / 'ai26.sqlite3')
 DEFAULT_RULES = {'watchlist': {'KL07AB1234': 'Local example watchlist entry; human review required'},
                  'restricted_cameras': ['CAM-09'], 'dwell_zones': []}
 
 
 def add_events(detections):
+    with store.lock:
+        return _add_events(detections)
+
+
+def _add_events(detections):
     validated = []
+    catalog = {c['id']:c for c in store.camera_catalog()}
     for raw in detections:
         event = Observation.model_validate(raw).model_dump(exclude_none=True)
         if event['camera_id'] not in CAMERAS_BY_ID: raise ValueError('Unknown camera in observation')
+        event['camera_configuration'] = catalog[event['camera_id']]
         if event['kind'] == 'plate':
             normalized = normalize_plate(event.get('plate_norm') or event.get('plate', ''))
             if not normalized['format_valid']:
@@ -45,20 +53,23 @@ def get_events(camera_id=None, plate=None, since=None, until=None, kind=None, li
 
 
 def _distance_km(first, second):
-    a, b = CAMERAS_BY_ID[first['camera_id']], CAMERAS_BY_ID[second['camera_id']]
+    a, b = first, second
     lat1, lat2 = radians(a['lat']), radians(b['lat'])
     h = sin((lat2-lat1)/2)**2 + cos(lat1)*cos(lat2)*sin(radians(b['lon']-a['lon'])/2)**2
     return 6371 * 2 * asin(min(1, sqrt(h)))
 
 
 def build_trajectory(observations):
-    ordered = sorted(observations, key=lambda e: e['ts'])
+    ordered = sorted(observations, key=lambda e: (e['ts'], e.get('event_id','')))
+    catalog = {c['id']:c for c in store.camera_catalog()}
     hops = []
     for event in ordered:
-        camera = CAMERAS_BY_ID.get(event['camera_id'], {})
+        camera = event.get('camera_configuration') or catalog.get(event['camera_id'], {})
         hops.append({**event, 'location': camera.get('location', 'Unknown'),
                      'location_confirmed': camera.get('location_confirmed', False),
                      'lat': camera.get('lat'), 'lon': camera.get('lon'),
+                     'camera_configuration':camera,
+                     'metadata_basis':'observation_snapshot' if event.get('camera_configuration') else 'current_catalog_legacy',
                      'repairs': event.get('repairs', [])})
     accepted, rejected, candidates = [], [], []
     for first, second in zip(hops, hops[1:]):
@@ -69,7 +80,13 @@ def build_trajectory(observations):
         link = {'from_camera_id': first['camera_id'], 'to_camera_id': second['camera_id'],
                 'from_ts': first['ts'], 'to_ts': second['ts'], 'distance_km': round(distance, 3),
                 'elapsed_seconds': round(elapsed, 3), 'implied_speed_kmh': round(speed, 1) if speed is not None else None,
-                'from_passage_id': first.get('passage_id'), 'to_passage_id': second.get('passage_id'), 'method': 'exact_plate'}
+                'from_passage_id': first.get('passage_id'), 'to_passage_id': second.get('passage_id'), 'method': 'exact_plate',
+                'supporting_event_ids':[first.get('event_id'),second.get('event_id')],
+                'algorithm_version':LINK_ALGORITHM_VERSION,
+                'camera_configurations':[first['camera_configuration'],second['camera_configuration']],
+                'metadata_basis':[first['metadata_basis'],second['metadata_basis']],
+                'time_bases':[first.get('time_basis','unspecified'),second.get('time_basis','unspecified')],
+                'identity_verified':False}
         # Recorded playback time is not original synchronized capture time.
         uncalibrated = not first['location_confirmed'] or not second['location_confirmed'] or any(
             e.get('time_basis') == 'replay_clock' for e in (first, second))
@@ -93,7 +110,9 @@ def get_trajectory(plate, since=None, until=None):
     normalized = str(normalize_plate(plate)['plate_norm'])
     start = time.time()-WINDOW_SECONDS if since is None else since
     end = time.time() if until is None else until
-    result = build_trajectory(store.supported_passage_reads(normalized, start, end))
+    with store.lock:
+        result = build_trajectory(store.supported_passage_reads(normalized, start, end))
+        result = store.put_journey_links(normalized,result)
     result['plate'] = normalized
     result['interval'] = {'since': start, 'until': time.time() if until is None else until}
     return result

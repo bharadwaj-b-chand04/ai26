@@ -4,14 +4,18 @@ import re
 import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-from cameras import CAMERAS, CAMERAS_BY_ID
+from cameras import CAMERAS_BY_ID
 from events import derive_alerts, stats
 
 
 def _find_camera(text):
-    for cam in CAMERAS:
-        if re.search(r'\b'+re.escape(cam['id'])+r'\b',text,re.I) or cam['location'].lower() in text.lower(): return cam
-    return None
+    import events
+    catalog = events.store.camera_catalog()
+    for cam in catalog:
+        if re.search(r'\b'+re.escape(cam['id'])+r'\b',text,re.I): return cam
+    matches = [c for c in catalog if c['location_confirmed'] and c['location'].lower() in text.lower()]
+    if len(matches)>1: raise ValueError('Location matches multiple cameras; use one camera ID')
+    return matches[0] if matches else None
 
 
 def _interval(text):
@@ -49,7 +53,8 @@ def answer(question):
     camera_names=re.findall(r'\bCAM-\d+\b',question,re.I)
     if any(c.upper() not in CAMERAS_BY_ID for c in camera_names): return {'status':'invalid','text':'Unknown camera ID. Use a configured ID from the Camera Wall.'}
     if len(set(c.upper() for c in camera_names))>1: return {'status':'unsupported','text':'Please query one camera at a time.'}
-    cam=_find_camera(q)
+    try: cam=_find_camera(q)
+    except ValueError as exc: return {'status':'invalid','text':str(exc)}
     # Whole-word matching prevents an arbitrary label from swallowing a requested plate.
     plate_pattern=r'\b([A-Z]{2}\s*\d{2}\s*[A-Z]{1,3}\s*\d{4}|\d{2}\s*BH\s*\d{4}\s*[A-Z]{1,2})\b'
     if len(re.findall(plate_pattern,question,re.I))>1: return {'status':'unsupported','text':'Please query one plate at a time.'}

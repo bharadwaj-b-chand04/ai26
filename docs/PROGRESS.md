@@ -1,12 +1,12 @@
 # AI26 implementation progress — 9 October 2026
 
-This is the first reliability implementation, not a completed accuracy release.
+This records the current reliability, tracking, persistence and performance implementation. Accuracy release gates remain open.
 The original audit/plan remain the baseline. AI26 alone was changed; the Godseye
 SIH source was left intact. The app runs on http://127.0.0.1:5174/.
 
 ## Status
 
-Across all 80 planned tasks: **38 done, 24 partial, 18 pending**. Done means the stated engineering behavior works within the documented local prototype scope. It does not imply real OCR/identity accuracy. Partial tasks retain explicit remaining work below.
+Across all 80 planned tasks: **39 done, 23 partial, 18 pending**. Done means the stated engineering behavior works within the documented local prototype scope. It does not imply real OCR/identity accuracy. Partial tasks retain explicit remaining work below.
 
 ## What now works
 
@@ -14,26 +14,34 @@ Shared background six-camera processing; durable SQLite observations/passages;
 per-track OCR abstention; real empty investigations; editable persistent local
 rules and review; truthful camera health/activity; bounded historical query
 intents; immutable evidence JSON/ZIP/print; source/derivative hashes; report expiry and artifact leases; cached camera previews;
-CPU lockfile; clean launcher shutdown/restart; regression and evaluation tooling.
+revisioned camera metadata and queried decision history; CPU lockfile; clean launcher shutdown/restart; regression and evaluation tooling.
+
+## Persistence update
+
+Schema 3 stores audited camera metadata revisions and immutable queried journey
+link decisions. New observations preserve configuration snapshots; legacy metadata
+fallback is explicit. Source routes remain fixed, calibration remains unverified,
+and stored decisions are historical conclusions rather than verified identity.
+See `docs/PERSISTENCE.md` and `AI26_PERSISTENCE_VALIDATION.json` in the delivery.
 
 ## Tracking update
 
 Local motion/box global assignment, elapsed-time expiry and ambiguity abstention
-are implemented and tested. The evaluator now measures visible-track fragmentation
+are implemented and tested. The evaluator measures visible-track fragmentation
 and checks frame order within camera/session. See `docs/TRACKING.md` for timing,
-constructed failure cases and limits. Real identity/count accuracy remains unmeasured.
+constructed failure cases and limits. Real identity/count accuracy is unmeasured.
 
 ## Validation
 
-- 69 isolated backend tests pass with the frozen Python 3.12 CPU environment.
+- 82 isolated backend tests pass with the frozen Python 3.12 CPU environment.
 - Frontend lint passes with two existing shared-component Fast Refresh warnings;
   TypeScript/Vite production build passes.
 - Fresh frozen sync installed CPU torch 2.14.0+cpu and torchvision 0.29.0+cpu.
 - Live restart retained all ten sampled observation IDs; all six available cameras
   returned decodable JPEG snapshots. No old service children survived launcher stop.
-- Browser mobile checks at 390×844 verified camera wall, investigation and alerts,
+- Earlier browser mobile checks at 390×844 verified camera wall, investigation and alerts,
   disabled empty export, and focus trapping/Escape restoration.
-- An isolated synthetic fixture on 5175/8002 exercised browser report creation,
+- An earlier isolated synthetic fixture on 5175/8002 exercised browser report creation,
   JSON and ZIP downloads, matching manifest/artifact hashes, and dedicated print.
   Fixture services/tabs were closed; its records were never added to the main DB.
 - Evaluation command processes two deliberately imperfect synthetic records; these
@@ -54,8 +62,8 @@ local results. Short runtime samples do not establish sustained throughput.
    evaluate exact/fuzzy identity links (P1-14–16, EV-06).
 4. Calibrate traffic counts/density/speed and historical segment baselines;
    evaluate rules on positive and negative real cases (P2-01–04, EV-07–09).
-5. Complete camera/link catalog persistence, ALPR weight provenance and
-   authenticated escalation where needed.
+5. Complete exact ALPR weight provenance, source onboarding/configuration UI and
+   authenticated escalation where needed. Metadata/link persistence is implemented.
 6. Optional research/production phases remain separate. No restored/reconstructed
    pixels, registry verification, signed evidence, RTSP capture or production auth
    is represented as implemented.
@@ -89,7 +97,7 @@ local results. Short runtime samples do not establish sustained throughput.
 | P1-02 | Done | Define inference ownership so multiple viewers do not create duplicate processing/event streams. | Streams/snapshots only consume cache; two-consumer regression and exclusive Linux data-directory ownership lock. |
 | P1-03 | Done | Add a typed observation schema with stable event IDs and per-track passage IDs. | Typed finite observations, deterministic idempotent read IDs, per-session local passage IDs. |
 | P1-04 | Partial | Preserve source clip/frame timestamp separately from processing time; define cross-camera clock handling. | Replay source position and processing time are separate; original capture times and synchronized clocks are missing. |
-| P1-05 | Partial | Add persistent observations, camera catalog, tracks, links and alert storage with migrations. | Version-2 SQLite with tested version-1 migration and report artifact leases; catalog is still static and links derived. |
+| P1-05 | Done | Add persistent observations, camera catalog, tracks, links and alert storage with migrations. | Schema-3 migrations retain reads/local passages/alerts, seed a revisioned camera catalog and persist immutable queried link decisions with support and algorithm/config snapshots; source onboarding and authenticated calibration remain separate work. |
 | P1-06 | Done | Expose a validated ingestion path rather than relying only on streaming request side effects. | Processor writes through typed validated ingestion rather than request-side streaming effects. No external ingestion API is claimed. |
 | P1-07 | Partial | Store source-frame and plate-crop references with hashes and model/version metadata. | Selected frame/crop digests, source SHA and pipeline/model versions retained; exact ALPR weight digests and per-read frame coverage remain. |
 | P1-08 | Done | Test reconnect, corrupt video, end-of-file, missing clips and inference exceptions with bounded retry/backoff. | Controlled reconnect, loop boundary, missing/corrupt input, decode failure and model-download exception tests; 10-second retry and stale-frame suppression. |
@@ -166,7 +174,7 @@ local results. Short runtime samples do not establish sustained throughput.
 | OP-01 | Pending | RTSP/ONVIF camera integration and resilient capture queues. | Optional production/edge work; not implemented for this local course prototype. |
 | OP-02 | Pending | Authentication, role-based access and purpose/case-scoped sensitive operations. | Optional production/edge work; not implemented for this local course prototype. |
 | OP-03 | Pending | Occupant face blurring and keyed plate pseudonyms in analytics views if those privacy features remain in scope. | Optional production/edge work; not implemented for this local course prototype. |
-| OP-04 | Partial | Durable audit logs, retention jobs, secrets handling and TLS. | Local SQLite audit and expiry cleanup exist; tamper-resistant audit, secrets/TLS and operational retention jobs pending. |
+| OP-04 | Partial | Durable audit logs, retention jobs, secrets handling and TLS. | Local SQLite audit and independent minute retention jobs exist; tamper-resistant audit and secrets/TLS remain pending. |
 | OP-05 | Pending | Container/Compose setup, database backups and production frontend-to-API routing. | Optional production/edge work; not implemented for this local course prototype. |
 | OP-06 | Pending | Edge model export/quantization and benchmark on actual target hardware. | Optional production/edge work; not implemented for this local course prototype. |
 | OP-07 | Partial | Canary/model-version pinning, rollback and branch-level disablement. | Dependency/model identifiers and processing-disable switch exist; canary rollout/model rollback are absent. |
