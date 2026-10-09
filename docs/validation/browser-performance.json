@@ -68,7 +68,7 @@
     "title": true
   },
   "emptyInvestigation": {
-    "title": false,
+    "title": true,
     "exportDisabled": true
   },
   "final": {
