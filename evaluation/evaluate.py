@@ -13,7 +13,9 @@ def iou(a,b):
 
 def evaluate(records):
     seen=set();plate_total=plate_correct=plate_false=plate_unread=0
-    tp=fp=fn=0;switches=0;identities={}
+    tp=fp=fn=0;switches=fragments=0;identities={};track_state={}
+    tracking_samples=sequence_samples=ordered_tracking_samples=0;frame_order={}
+    tracking_scopes={(r.get('camera'),r.get('session')) for r in records if any('identity' in g for g in r.get('expected_boxes',[]))}
     link_tp=link_fp=link_fn=0;rule_tp=rule_fp=rule_fn=0
     passages_expected=passages_predicted=0
     for r in records:
@@ -27,19 +29,52 @@ def evaluate(records):
             plate_unread+=prediction is None
             plate_false+=prediction is not None and prediction!=expected
         ground=r.get('expected_boxes',[]);prediction=r.get('predicted_boxes',[])
+        labeled=[g for g in ground if 'identity' in g]
+        scope=(r.get('camera'),r.get('session'))
+        if labeled:
+            if any(not isinstance(value,str) or not value.strip() for value in scope):
+                raise ValueError('Tracking labels require camera and recording session')
+            if len({g['identity'] for g in labeled}) != len(labeled):
+                raise ValueError('A ground-truth identity must occur once per frame')
+            tracking_samples+=1
+        sequence_samples+=scope in tracking_scopes
+        if 'frame_index' in r:
+            frame=r['frame_index']
+            if type(frame) is not int or frame<0: raise ValueError('frame_index must be a nonnegative integer')
+            if scope in frame_order and frame<=frame_order[scope]:
+                raise ValueError('Frames must be strictly ordered within camera/session')
+            frame_order[scope]=frame
+            ordered_tracking_samples+=scope in tracking_scopes
+
         matches=[]
         for pi,p in enumerate(prediction):
             for gi,g in enumerate(ground):
                 if p['label']==g['label']: matches.append((iou(p['bbox'],g['bbox']),pi,gi))
-        used_p=set();used_g=set()
+        used_p=set();used_g=set();matched_boxes={}
         for score,pi,gi in sorted(matches,reverse=True):
             if score<.5 or pi in used_p or gi in used_g: continue
             used_p.add(pi);used_g.add(gi);tp+=1
-            g,p=ground[gi],prediction[pi]
-            if 'identity' in g and 'track_id' in p:
-                key=(r.get('camera'),r.get('session'),g['identity'])
-                if key in identities and identities[key]!=p['track_id']:switches+=1
-                identities[key]=p['track_id']
+            matched_boxes[gi]=prediction[pi]
+        visible={(scope[0],scope[1],g['identity']) for g in labeled}
+        # Ground-truth absence ends a visible span; an unlabeled interval is not a
+        # measured tracking miss. A fragment needs visible tracked -> missed -> tracked.
+        for key,state in track_state.items():
+            if key[:2]==scope and key not in visible:
+                state['interrupted']=False;state['span_seen']=False
+        for gi,g in enumerate(ground):
+            if 'identity' not in g: continue
+            key=(scope[0],scope[1],g['identity'])
+            state=track_state.setdefault(key,{'span_seen':False,'interrupted':False,'visible_frames':0,'tracked_frames':0})
+            state['visible_frames']+=1
+            p=matched_boxes.get(gi)
+            if p is None or p.get('track_id') is None:
+                if state['span_seen']: state['interrupted']=True
+                continue
+            state['tracked_frames']+=1
+            if state['span_seen'] and state['interrupted']: fragments+=1
+            if key in identities and identities[key]!=p['track_id']: switches+=1
+            identities[key]=p['track_id']
+            state['span_seen']=True;state['interrupted']=False
         fp+=len(prediction)-len(used_p);fn+=len(ground)-len(used_g)
         for prefix in ('link','rule'):
             expected=r.get('expected_'+prefix);predicted=r.get('predicted_'+prefix)
@@ -54,11 +89,17 @@ def evaluate(records):
     return {'sample_count':len(records),'synthetic':any(r.get('synthetic',False) for r in records),
             'detector':{'tp':tp,'fp':fp,'fn':fn,'precision':rate(tp,tp+fp),'recall':rate(tp,tp+fn),'iou_threshold':.5},
             'plates':{'labeled_samples':plate_total,'exact_matches':plate_correct,'exact_match_rate':rate(plate_correct,plate_total),'false_reads':plate_false,'abstentions':plate_unread},
-            'tracking':{'matched_ground_truth_identities':len(identities),'id_switches':switches},
+            'tracking':{'matched_ground_truth_identities':len(identities),'labeled_ground_truth_identities':len(track_state),
+                        'id_switches':switches,'fragmentations':fragments,
+                        'visible_identity_frames':sum(s['visible_frames'] for s in track_state.values()),
+                        'matched_identity_frames':sum(s['tracked_frames'] for s in track_state.values()),
+                        'labeled_frame_samples':tracking_samples,'sequence_frame_samples':sequence_samples,
+                        'ordered_frame_samples':ordered_tracking_samples,'unverified_frame_samples':sequence_samples-ordered_tracking_samples,
+                        'chronology_verified':bool(sequence_samples) and sequence_samples==ordered_tracking_samples},
             'links':{'tp':link_tp,'fp':link_fp,'fn':link_fn,'precision':rate(link_tp,link_tp+link_fp),'recall':rate(link_tp,link_tp+link_fn)},
             'rules':{'tp':rule_tp,'fp':rule_fp,'fn':rule_fn,'precision':rate(rule_tp,rule_tp+rule_fp),'recall':rate(rule_tp,rule_tp+rule_fn)},
             'passages':{'expected':passages_expected,'predicted':passages_predicted,'signed_error':passages_predicted-passages_expected},
-            'limitations':['Inputs must be labeled held-out predictions in source-time order. This runner does not supply labels or prove split independence. Synthetic records are correctness fixtures only.']}
+            'limitations':['Inputs must be labeled held-out predictions in source-time order; frame_index verifies order when supplied. Fragmentation counts interruptions while ground truth stays visible. This runner does not supply labels or prove split independence. Synthetic records are correctness fixtures only.']}
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)

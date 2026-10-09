@@ -11,7 +11,7 @@ from fast_alpr import ALPR
 from ultralytics import YOLO
 
 from plate_format import normalize_plate
-from tracking import CentroidTracker
+from tracking import CentroidTracker, TRACKER_VERSION
 
 VEHICLE_CLASS_IDS = {2, 3, 5, 7}  # car, motorcycle, bus, truck (COCO)
 DEVICE = 0 if torch.cuda.is_available() else "cpu"
@@ -31,7 +31,7 @@ _yolo = YOLO(str(_checkpoint))
 with _checkpoint.open('rb') as _model_file:
     _checkpoint_hash = hashlib.file_digest(_model_file, 'sha256').hexdigest()
 _pipeline_hash = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
-_model_metadata = {"checkpoint_sha256": _checkpoint_hash, "torch_version": str(torch.__version__), "cpu_threads": CPU_THREADS,
+_model_metadata = {"checkpoint_sha256": _checkpoint_hash, "torch_version": str(torch.__version__), "cpu_threads": CPU_THREADS, "tracker_version": TRACKER_VERSION,
                    "ultralytics_version": version("ultralytics"), "pipeline_sha256": _pipeline_hash}
 _alpr = None
 
@@ -66,7 +66,7 @@ def annotate_vehicle_frame(frame, camera_id: str):
         label = _yolo.names[cls_id]
         raw_detections.append({"label": label, "bbox": [x1, y1, x2, y2], "confidence": conf})
 
-    for detection in _vehicle_trackers[camera_id].update(raw_detections):
+    for detection in _vehicle_trackers[camera_id].update(raw_detections, timestamp=time.monotonic()):
         label = detection["label"]
         x1, y1, x2, y2 = detection["bbox"]
         conf = detection["confidence"]
@@ -85,6 +85,8 @@ def annotate_vehicle_frame(frame, camera_id: str):
             "label": label,
             "confidence": round(conf, 3),
             "track_id": detection["track_id"],
+            "association_status": detection["association_status"],
+            "association_cost": detection["association_cost"],
             "bbox": [x1, y1, x2, y2],
             "ts": time.time(),
         })
@@ -114,7 +116,7 @@ def annotate_plate_frame(frame, camera_id: str):
             "normalized": normalized,
         })
 
-    for detection in _plate_trackers[camera_id].update(raw_detections):
+    for detection in _plate_trackers[camera_id].update(raw_detections, timestamp=time.monotonic()):
         x1, y1, x2, y2 = detection["bbox"]
         plate_text = detection["plate_text"]
         ocr_conf = detection["ocr_conf"]
@@ -122,7 +124,7 @@ def annotate_plate_frame(frame, camera_id: str):
         for start, end in zip(detection["track_history"], detection["track_history"][1:]):
             cv2.line(frame, start, end, CRIT, 2, cv2.LINE_AA)
         cv2.rectangle(frame, (x1, y1), (x2, y2), CRIT, 2)
-        if ocr_conf < PLATE_MIN_CONF or not normalized["format_valid"]:
+        if ocr_conf < PLATE_MIN_CONF or not normalized["format_valid"] or detection["association_status"] == "ambiguous":
             tag = f"PLATE DETECTED #{detection['track_id']} {ocr_conf * 100:.0f}%"
             (tw, th), _ = cv2.getTextSize(tag, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
             cv2.rectangle(frame, (x1, y1 - th - 8), (x1 + tw + 6, y1), CRIT, -1)
@@ -131,14 +133,15 @@ def annotate_plate_frame(frame, camera_id: str):
             detections.append({"camera_id": camera_id, "kind": "plate", "plate_raw": plate_text,
                                "plate_norm": str(normalized["plate_norm"]) if normalized["format_valid"] else None,
                                "format_valid": normalized["format_valid"], "repairs": normalized["repairs"],
-                               "identity_status": "low_confidence" if ocr_conf < PLATE_MIN_CONF else "invalid",
+                               "identity_status": "tracking_ambiguous" if detection["association_status"] == "ambiguous" else "low_confidence" if ocr_conf < PLATE_MIN_CONF else "invalid",
                                "confidence": round(ocr_conf, 3), "bbox": [x1,y1,x2,y2],
-                               "track_id": detection["track_id"], "ts": time.time(),
-                               "model_metadata": {"fast_alpr_version":version("fast-alpr"), "pipeline_sha256":_pipeline_hash}})
+                               "track_id": detection["track_id"], "association_status": detection["association_status"],
+                               "association_cost": detection["association_cost"], "ts": time.time(),
+                               "model_metadata": {"fast_alpr_version":version("fast-alpr"), "pipeline_sha256":_pipeline_hash, "tracker_version":TRACKER_VERSION}})
             continue
 
         plate_norm = str(normalized["plate_norm"])
-        consensus = _consensus.read(camera_id, detection["track_id"], plate_norm)
+        consensus = _consensus.read(camera_id, detection["track_id"], plate_norm, detection["association_status"])
         fused_text = plate_norm
 
         tag = f"PLATE #{detection['track_id']} {fused_text} {ocr_conf * 100:.0f}%"
@@ -149,16 +152,18 @@ def annotate_plate_frame(frame, camera_id: str):
             "camera_id": camera_id,
             "kind": "plate",
             **consensus,
-            "model_metadata": {"fast_alpr_version":version("fast-alpr"), "pipeline_sha256":_pipeline_hash},
+            "model_metadata": {"fast_alpr_version":version("fast-alpr"), "pipeline_sha256":_pipeline_hash, "tracker_version":TRACKER_VERSION},
             "plate": plate_norm,
             "plate_norm": plate_norm,
             "plate_raw": plate_text,
             "format_valid": True,
             "repairs": normalized["repairs"],
             "track_id": detection["track_id"],
+            "association_status": detection["association_status"],
+            "association_cost": detection["association_cost"],
             "confidence": round(ocr_conf, 3),
             "bbox": [x1, y1, x2, y2],
             "ts": time.time(),
         })
-    _consensus.retain(camera_id, {track.track_id for track in _plate_trackers[camera_id]._tracks})
+    _consensus.retain(camera_id, _plate_trackers[camera_id].active_ids)
     return frame, detections

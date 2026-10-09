@@ -6,7 +6,7 @@ SIH source was left intact. The app runs on http://127.0.0.1:5174/.
 
 ## Status
 
-Across all 80 planned tasks: **37 done, 25 partial, 18 pending**. Done means the stated engineering behavior works within the documented local prototype scope. It does not imply real OCR/identity accuracy. Partial tasks retain explicit remaining work below.
+Across all 80 planned tasks: **38 done, 24 partial, 18 pending**. Done means the stated engineering behavior works within the documented local prototype scope. It does not imply real OCR/identity accuracy. Partial tasks retain explicit remaining work below.
 
 ## What now works
 
@@ -16,17 +16,16 @@ rules and review; truthful camera health/activity; bounded historical query
 intents; immutable evidence JSON/ZIP/print; source/derivative hashes; report expiry and artifact leases; cached camera previews;
 CPU lockfile; clean launcher shutdown/restart; regression and evaluation tooling.
 
-## Performance update
+## Tracking update
 
-The camera wall uses six cached 320×180 previews and one focused recorded player;
-shared detections remain a separately labeled sampled view. Polling pauses when
-hidden and requests do not overlap. The log fetches at most 40 rows. CPU/decode
-threads are bounded. See `docs/PERFORMANCE.md` in the repository for the measured
-short before/after samples and limits. Active-report retention is now implemented.
+Local motion/box global assignment, elapsed-time expiry and ambiguity abstention
+are implemented and tested. The evaluator now measures visible-track fragmentation
+and checks frame order within camera/session. See `docs/TRACKING.md` for timing,
+constructed failure cases and limits. Real identity/count accuracy remains unmeasured.
 
 ## Validation
 
-- 55 isolated backend tests pass with the frozen Python 3.12 CPU environment.
+- 69 isolated backend tests pass with the frozen Python 3.12 CPU environment.
 - Frontend lint passes with two existing shared-component Fast Refresh warnings;
   TypeScript/Vite production build passes.
 - Fresh frozen sync installed CPU torch 2.14.0+cpu and torchvision 0.29.0+cpu.
@@ -50,7 +49,7 @@ local results. Short runtime samples do not establish sustained throughput.
    a held-out vehicle/camera/session dataset (P0-02, EV-01). Source availability
    is already explicit while these files are absent.
 2. Improve local association and vehicle/plate linkage, benchmark OCR/fusion and
-   tracker errors (P1-12, EV-02–05). Current centroid IDs are a baseline.
+   tracker errors (EV-02–05). Motion/box assignment remains a heuristic baseline.
 3. Validate coordinates/clocks and camera-pair topology/travel constraints, then
    evaluate exact/fuzzy identity links (P1-14–16, EV-06).
 4. Calibrate traffic counts/density/speed and historical segment baselines;
@@ -97,7 +96,7 @@ local results. Short runtime samples do not establish sustained throughput.
 | P1-09 | Done | Reset camera and panel errors after input changes or successful recovery. | Camera change/success clears focused-feed failures; API panels clear errors after recovery. Missing-to-available thumbnail remount supported. |
 | P1-10 | Done | Return correct HTTP status/error schemas for invalid cameras, plates and request bodies. | Known invalid cameras/missing sources 404; invalid bodies/plates/times 422; unready snapshot 503; JSON error envelope. |
 | P1-11 | Done | Add actual health/FPS/frame-age/queue/last-event metrics per camera. | Real per-camera frame age, FPS, latency, last read, source/error state; queue depth zero for the no-queue architecture. |
-| P1-12 | Partial | Separate local tracking from cross-camera identity; improve association under occlusion and clip loops. | Local IDs reset on loop/reopen and remain distinct from cross-camera candidates; stronger occlusion association is pending. |
+| P1-12 | Done | Separate local tracking from cross-camera identity; improve association under occlusion and clip loops. | Motion/box global assignment, ambiguity abstention, elapsed-time expiry and loop/reopen resets are tested; this is heuristic local tracking, with real occlusion/ID accuracy still unmeasured. |
 | P1-13 | Done | Deduplicate repeated same-track plate reads and retain corrections without silently overwriting evidence. | Immutable raw reads, deduplicated plate passages and conflict exclusion; uncertain corrections do not silently become supported identity. |
 | P1-14 | Pending | Add plate matching confidence and fuzzy matching with measured false-link limits. | Measured fuzzy matching/confidence and false-link limits require labeled identity data. |
 | P1-15 | Pending | Use validated camera locations and camera-pair travel constraints for cross-camera links. | Independent camera coordinate validation, road topology and camera-pair travel gates are not implemented. |
@@ -136,7 +135,7 @@ local results. Short runtime samples do not establish sustained throughput.
 | EV-02 | Partial | Measure vehicle precision/recall and false positives rather than quoting model confidence. | IoU-matched detector precision/recall evaluator implemented; no real labeled measurements. |
 | EV-03 | Partial | Measure exact plate-string accuracy and rejected/invalid read rates on readable and difficult footage. | Exact string/abstention evaluator implemented; no real OCR accuracy or difficult-input strata. |
 | EV-04 | Partial | Compare per-track fusion against single-frame OCR; verify it never mixes identities. | Consensus isolation/conflict regression passes; measured single-frame versus fusion ablation is pending. |
-| EV-05 | Partial | Measure tracker ID switches, fragmentation and passage-count error. | ID-switch and passage error metrics implemented; fragmentation and real labeled tracker evaluation pending. |
+| EV-05 | Partial | Measure tracker ID switches, fragmentation and passage-count error. | ID-switch, visible-track fragmentation and passage error metrics implemented, with camera/session order checks; real labeled tracking evaluation remains pending. |
 | EV-06 | Partial | Measure accepted/rejected trajectory-link precision and impossible-travel false alerts. | Positive/negative link evaluation implemented; real false-link/false-alert estimates pending. |
 | EV-07 | Partial | Evaluate loitering/restricted-zone/watchlist rules with both positive and negative cases. | Positive/negative dwell, watchlist/review and zone configuration tests; labeled footage-level rule evaluation pending. |
 | EV-08 | Partial | Validate derived traffic metrics against independent counts or known synthetic ground truth. | Known synthetic passage fixtures verify deduplication; independent real traffic counts/calibration pending. |

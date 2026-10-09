@@ -7,7 +7,10 @@ class PlateConsensus:
         self.window = window
         self.history = defaultdict(lambda: deque(maxlen=window))
 
-    def read(self, camera, track, plate):
+    def read(self, camera, track, plate, association_status='matched'):
+        if association_status == 'ambiguous':
+            self.history.pop((camera, track), None)
+            return {'identity_status': 'tracking_ambiguous', 'fused_plate': None, 'supporting_reads': 0}
         history = self.history[(camera, track)]
         history.append(plate)
         if len(set(history)) > 1:

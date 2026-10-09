@@ -6,10 +6,11 @@
 2. FastAPI lifespan starts one `processing.Processor`. A Linux advisory lock
    prevents a second owner of the same data directory. Sequential bounded sampling
    covers every available source without a browser request or growing queue.
-3. `inference.py` runs YOLO and, for plate inputs, lazy Fast-ALPR. Local centroid
-   IDs and OCR consensus are scoped to camera/session/track and reset on replay
+3. `inference.py` runs YOLO and, for plate inputs, lazy Fast-ALPR. Camera-local motion/box
+   assignment IDs and OCR consensus are scoped to camera/session/track and reset on replay
    loops. Three consistent normalized reads support an identity; conflicting
-   reads abstain. Invalid/low-confidence OCR stays in raw history.
+   reads abstain. Ambiguous association retires implicated old IDs and retains raw
+   OCR without a supported identity. Invalid/low-confidence reads stay in history.
 4. Typed ingestion writes immutable frame reads and camera-local passage summaries
    to SQLite WAL. Retries of the same session/frame/kind/track are idempotent.
    A contradictory supported identity invalidates its passage for identity queries.
@@ -118,8 +119,8 @@ access controls, tamper-resistant audit storage and signing remain pending.
 
 Unit/contract tests use temporary storage and deterministic fixtures. The
 `evaluation/` CLI measures box precision/recall, exact OCR strings/abstentions,
-ID switches, link/rule decisions and passage error. Its example is synthetic and
-cannot establish real accuracy. Track fragmentation, held-out splits, measured
+ID switches, visible-track fragmentation, link/rule decisions and passage error. Its example is synthetic and
+cannot establish real accuracy. Held-out tracking accuracy, independently split data, measured
 fusion gains, calibration, labeled adverse conditions, original recording clocks,
 and sustained target-hardware benchmarks remain release gates.
 
@@ -142,3 +143,23 @@ one FFmpeg decoder thread per capture; `AI26_CPU_THREADS` permits 1–8 Torch th
 
 See `PERFORMANCE.md` for measured results and their limits. Sparse sampling remains
 an accuracy limitation; these changes do not claim real-time full-frame inference.
+
+## Local association
+
+`tracking.py` retains the public `CentroidTracker` name for compatibility. Its
+implementation now predicts box motion from the last two observed positions,
+gates class/size/shape/distance, and solves a global assignment with explicit
+unmatched choices. Near-equal competing assignments retire implicated old tracks
+and assign fresh ambiguous IDs. The plate pipeline keeps raw/canonical strings
+but abstains from supporting identity for those associations. Track histories
+contain observed positions only; they never present predicted motion as evidence.
+
+Tracks expire after at most 12 elapsed seconds or the configured missed-frame
+bound. The processor resets trackers/fusion at replay/session boundaries.
+Observations include association status/cost and tracker version. Cost is a
+heuristic used for local association, not a probability or human verification.
+Sparse samples, nonlinear motion, similar boxes and camera occlusion can still
+fragment tracks or overcount passages. Vehicle/plate tracks remain separate;
+learned appearance and validated vehicle/plate linkage are not implemented.
+
+See `TRACKING.md` for synthetic tests, timing samples and evaluation requirements.
