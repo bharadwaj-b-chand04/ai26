@@ -1,0 +1,354 @@
+"""Regression/contract tests use isolated storage and deterministic fixtures, never live data."""
+import hashlib
+import io
+import json
+import os
+import sys
+import tempfile
+import time
+import unittest
+import zipfile
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch, Mock
+
+os.environ['AI26_PROCESSING_ENABLED']='0'
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'backend'))
+import numpy as np
+from fastapi.testclient import TestClient
+import events
+import main
+import processing
+import artifacts
+import stream
+import nlquery
+from repository import Repository, canonical_json
+from fusion import PlateConsensus
+
+class Reliability(unittest.TestCase):
+    def setUp(self):
+        self.folder=tempfile.TemporaryDirectory();self.addCleanup(self.folder.cleanup)
+        self.path=Path(self.folder.name)/'test.sqlite3'
+        self.repo=Repository(self.path)
+        for module in (events,main,processing):
+            p=patch.object(module,'store',self.repo);p.start();self.addCleanup(p.stop)
+        p=patch.object(artifacts,'ROOT',Path(self.folder.name)/'artifacts');p.start();self.addCleanup(p.stop)
+        self.addCleanup(lambda:self.repo.close())
+        self.client=TestClient(main.app)
+        self.now=time.time()
+
+    def plate(self,camera='CAM-07',ts=None,plate='KL07AB1234',**extra):
+        return {'camera_id':camera,'kind':'plate','plate':plate,'plate_norm':plate,'plate_raw':plate,
+                'confidence':.9,'bbox':[0,0,20,20],'ts':self.now if ts is None else ts,**extra}
+
+    def vehicle(self,ts=None,track=1,**extra):
+        return {'camera_id':'CAM-01','kind':'vehicle','label':'car','track_id':track,'session_id':'test-session',
+                'confidence':.9,'bbox':[10,10,30,30],'frame_size':[100,100],'ts':self.now if ts is None else ts,**extra}
+
+    def test_idle_expiry_preserves_durable_history(self):
+        events.add_events([self.plate()])
+        with patch.object(events.time,'time',return_value=self.now+301):
+            self.assertEqual(events.get_events(),[])
+            self.assertEqual(events.stats()['total_events'],0)
+        self.assertEqual(len(events.get_events(since=0)),1)
+
+    def test_out_of_order_window_filter(self):
+        events.add_events([self.plate(),self.plate('CAM-08',self.now-400)])
+        self.assertEqual(len(events.get_events()),1)
+
+    def test_retry_idempotency_and_restart(self):
+        event=self.vehicle(frame_id=42)
+        self.assertEqual(events.add_events([event]),1)
+        self.assertEqual(events.add_events([event]),0)
+        reopened=Repository(self.path)
+        try:self.assertEqual(len(reopened.observations()),1)
+        finally:reopened.close()
+
+    def test_one_vehicle_six_frames_is_one_passage(self):
+        events.add_events([self.vehicle(self.now-i*.1,frame_id=i) for i in range(6)])
+        self.assertEqual(events.stats()['total_events'],6)
+        self.assertEqual(events.stats()['vehicle_passages'],1)
+        self.assertEqual(events.derive_alerts(),[])
+
+    def test_plate_votes_isolated_and_conflicts_abstain(self):
+        fusion=PlateConsensus()
+        for _ in range(3): result=fusion.read('CAM-07',1,'KL07AB1234')
+        self.assertEqual(result['fused_plate'],'KL07AB1234')
+        b=fusion.read('CAM-07',2,'TN22ZZ0007')
+        self.assertEqual(b['identity_status'],'tentative');self.assertIsNone(b['fused_plate'])
+        conflict=fusion.read('CAM-07',1,'TN22ZZ0007')
+        self.assertEqual(conflict['identity_status'],'conflicting');self.assertIsNone(conflict['fused_plate'])
+        fusion.reset('CAM-07');self.assertEqual(len(fusion.history),0)
+
+    def test_conflicting_track_not_used_for_trajectory(self):
+        events.add_events([self.plate(track_id=1,session_id='a',identity_status='supported'),
+                           self.plate(ts=self.now+1,track_id=1,session_id='a',plate='TN22ZZ0007',identity_status='conflicting')])
+        self.assertEqual(events.get_trajectory('KL07AB1234',0)['status'],'not_found')
+
+    def test_equal_timestamps_http_and_evidence(self):
+        events.add_events([self.plate(),self.plate('CAM-08')])
+        response=self.client.get('/api/trajectory/KL07AB1234')
+        self.assertEqual(response.status_code,200)
+        self.assertIsNone(response.json()['rejected_links'][0]['implied_speed_kmh'])
+        report=self.client.post('/api/evidence/KL07AB1234')
+        self.assertEqual(report.status_code,200)
+
+    def test_mixed_route_requires_review(self):
+        result=events.build_trajectory([self.plate(ts=self.now-121),self.plate('CAM-08',self.now-1),self.plate('CAM-09')])
+        self.assertEqual(len(result['accepted_links']),1)
+        self.assertEqual(len(result['rejected_links']),1)
+        self.assertEqual(result['status'],'review_required')
+
+    def test_replay_time_not_physical_travel_claim(self):
+        result=events.build_trajectory([self.plate(ts=self.now-120,time_basis='replay_clock'),self.plate('CAM-08',time_basis='replay_clock')])
+        self.assertEqual(result['accepted_links'],[])
+        self.assertEqual(len(result['candidate_links']),1)
+        self.assertIsNone(result['candidate_links'][0]['implied_speed_kmh'])
+
+    def test_unknown_camera_and_missing_source(self):
+        for route in ['video','stream','snapshot']:
+            self.assertEqual(self.client.get(f'/api/{route}/NO-CAMERA').status_code,404)
+            self.assertEqual(self.client.get(f'/api/{route}/CAM-07').status_code,404)
+        catalog=self.client.get('/api/cameras').json()
+        self.assertEqual(sum(c['source_available'] for c in catalog),6)
+
+    def test_question_validation(self):
+        for body in [{},{'question':None},{'question':123},{'question':True},{'question':' '},{'question':'x'*501}]:
+            self.assertEqual(self.client.post('/api/nlquery',json=body).status_code,422)
+        self.assertEqual(self.client.post('/api/nlquery',json={'question':'busiest camera'}).status_code,200)
+
+    def test_invalid_plate_and_time_filters(self):
+        self.assertEqual(self.client.get('/api/trajectory/garbage').status_code,422)
+        for query in ['since=nan','since=inf','since=5&until=2','limit=0']:
+            self.assertEqual(self.client.get('/api/events?'+query).status_code,422)
+
+    def test_empty_evidence_rejected(self):
+        self.assertEqual(self.client.post('/api/evidence/DL07ZZ9999').status_code,409)
+
+    def test_failed_raw_reads_retained_without_becoming_identity(self):
+        events.add_events([self.plate(plate='',plate_norm='',plate_raw='?L 07 ??',identity_status='invalid',track_id=1,session_id='ocr',frame_id=1)])
+        raw=self.repo.observations()[0]
+        self.assertEqual(raw['plate_raw'],'?L 07 ??');self.assertIsNone(raw['plate_norm'])
+        self.assertEqual(events.get_trajectory('KL07AB1234',0)['status'],'not_found')
+        self.assertEqual(events.derive_alerts(),[])
+
+    def test_report_includes_tentative_and_failed_reads_of_supported_track(self):
+        shared={'track_id':1,'session_id':'ocr'}
+        events.add_events([self.plate(ts=self.now-2,frame_id=1,identity_status='tentative',**shared),
+                           self.plate(ts=self.now-1,frame_id=2,identity_status='supported',**shared),
+                           self.plate(frame_id=3,plate='TN22ZZ0007',identity_status='low_confidence',confidence=.2,**shared)])
+        report=events.evidence_report('KL07AB1234',self.now-10,self.now+1)
+        self.assertEqual(len(report['trajectory']['observations']),1)
+        self.assertEqual(report['raw_read_count'],3)
+        printed=self.client.get('/api/reports/'+report['report_id']+'/print').text
+        self.assertIn('Supporting raw reads (3)',printed)
+        self.assertIn('low_confidence',printed);self.assertIn('TN22ZZ0007',printed)
+
+    def test_report_refuses_to_silently_truncate_reads(self):
+        events.add_events([self.plate()])
+        with patch.object(self.repo,'reads_for_passages',return_value=([],5001)):
+            self.assertEqual(self.client.post('/api/evidence/KL07AB1234').status_code,409)
+
+    def test_passage_count_requires_an_observation_inside_interval(self):
+        events.add_events([self.vehicle(self.now-10,frame_id=1),self.vehicle(self.now,frame_id=2)])
+        self.assertEqual(events.stats(since=self.now-8,until=self.now-2)['vehicle_passages'],0)
+
+    def test_oversized_artifact_package_is_rejected(self):
+        fake={'sha256':'a'*64,'role':'plate-crop','size':65*1024*1024}
+        events.add_events([self.plate(artifacts=[fake])]);report=events.evidence_report('KL07AB1234')
+        self.assertEqual(self.client.get('/api/reports/'+report['report_id']+'/package').status_code,413)
+
+    def test_evidence_snapshot_hash_download_and_print(self):
+        events.add_events([self.plate()])
+        report=self.client.post('/api/evidence/KL07AB1234').json()
+        digest=report['package_hash']
+        unsigned={k:v for k,v in report.items() if k!='package_hash'}
+        self.assertEqual(digest,hashlib.sha256(canonical_json(unsigned).encode()).hexdigest())
+        events.add_events([self.plate('CAM-08',self.now+1)])
+        loaded=self.client.get('/api/reports/'+report['report_id'])
+        self.assertEqual(loaded.json(),report)
+        printed=self.client.get('/api/reports/'+report['report_id']+'/print').text
+        self.assertIn(digest,printed);self.assertNotIn('Blue city bus',printed)
+        package=self.client.get('/api/reports/'+report['report_id']+'/package')
+        with zipfile.ZipFile(io.BytesIO(package.content)) as z:self.assertEqual(json.loads(z.read('manifest.json')),report)
+
+    def test_expired_report_inaccessible(self):
+        events.add_events([self.plate()]);report=events.evidence_report('KL07AB1234')
+        with patch.object(main.time,'time',return_value=report['expires_at']+1):
+            self.assertEqual(self.client.get('/api/reports/'+report['report_id']).status_code,404)
+
+    def test_artifact_corruption_detected(self):
+        ref=artifacts.save_image(np.zeros((30,30,3),dtype=np.uint8),'plate-crop')
+        self.assertEqual(hashlib.sha256(artifacts.artifact_bytes(ref['sha256'])).hexdigest(),ref['sha256'])
+        (artifacts.ROOT/(ref['sha256']+'.jpg')).write_bytes(b'changed')
+        self.assertEqual(self.client.get(ref['url']).status_code,409)
+
+    def test_report_tampering_rejected(self):
+        events.add_events([self.plate()]);report=events.evidence_report('KL07AB1234')
+        report['trajectory']['plate']='TN22ZZ0007'
+        with self.repo.db:self.repo.db.execute('UPDATE reports SET data=? WHERE id=?',(canonical_json(report),report['report_id']))
+        self.assertEqual(self.client.get('/api/reports/'+report['report_id']).status_code,409)
+
+    def test_specific_plate_query_filters_other_plates(self):
+        events.add_events([self.plate(),self.plate('CAM-08',plate='TN22ZZ0007')])
+        answer=nlquery.answer('Where was plate KL07AB1234?')['text']
+        self.assertIn('KL07AB1234',answer);self.assertNotIn('TN22ZZ0007',answer)
+
+    def test_today_queries_history_not_five_minute_window(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        start=datetime.now(ZoneInfo('Asia/Kolkata')).replace(hour=0,minute=0,second=0,microsecond=0).timestamp()
+        if self.now-start<400:self.skipTest('Too close to midnight for this fixture')
+        events.add_events([self.plate(ts=start+1)])
+        self.assertNotIn('KL07AB1234',nlquery.answer('plates at CAM-07')['text'])
+        self.assertIn('KL07AB1234',nlquery.answer('plates at CAM-07 today')['text'])
+
+    def test_unsupported_query_clear_and_no_fake_sql(self):
+        result=nlquery.answer('How congested is the city?')
+        self.assertEqual(result['status'],'unsupported');self.assertNotIn('sql',result)
+
+    def test_dwell_requires_elapsed_zone_presence(self):
+        self.repo.set_setting('rules',{'watchlist':{},'restricted_cameras':[], 'dwell_zones':[{'camera_id':'CAM-01','zone':[0,0,.5,.5],'dwell_seconds':10,'max_gap_seconds':5}]})
+        events.add_events([self.vehicle(self.now-10+i*5,frame_id=i) for i in range(3)])
+        alerts=events.derive_alerts();self.assertEqual([a['type'] for a in alerts],['zone dwell'])
+        self.assertEqual(len(alerts[0]['supporting_event_ids']),3)
+
+    def test_dwell_breaks_on_zone_exit_and_capture_gap(self):
+        self.repo.set_setting('rules',{'watchlist':{},'restricted_cameras':[], 'dwell_zones':[{'camera_id':'CAM-01','zone':[0,0,.5,.5],'dwell_seconds':10,'max_gap_seconds':5}]})
+        events.add_events([self.vehicle(self.now-15,frame_id=1),self.vehicle(self.now-10,frame_id=2,bbox=[70,70,90,90]),self.vehicle(self.now,frame_id=3)])
+        self.assertEqual(events.derive_alerts(),[])
+
+    def test_review_state_survives_rule_recalculation_and_reopen(self):
+        events.add_events([self.plate()]);alert=events.derive_alerts()[0]
+        response=self.client.post(f'/api/alerts/{alert["alert_id"]}/review',json={'state':'acknowledged','reviewer':'Course reviewer','note':'Inspect crop'})
+        self.assertEqual(response.status_code,200)
+        same=next(a for a in events.derive_alerts() if a['alert_id']==alert['alert_id'])
+        self.assertEqual(same['state'],'acknowledged')
+        reopened=Repository(self.path)
+        try:self.assertEqual(reopened.alerts()[0]['review'][0]['reviewer'],'Course reviewer')
+        finally:reopened.close()
+
+    def test_rule_configuration_validated_and_persisted(self):
+        valid={'watchlist':{'kl 07 ab 1234':'Review this local plate'},'restricted_cameras':['CAM-07'],'dwell_zones':[]}
+        self.assertEqual(self.client.put('/api/rules',json=valid).status_code,200)
+        self.assertIn('KL07AB1234',self.client.get('/api/rules').json()['watchlist'])
+        valid['dwell_zones']=[{'camera_id':'CAM-01','zone':[1,0,0,1]}]
+        self.assertEqual(self.client.put('/api/rules',json=valid).status_code,422)
+
+    def test_consumers_do_not_ingest_or_run_models(self):
+        p=processing.Processor(cameras=[{'id':'CAM-01','kind':'vehicle'}])
+        p.state['CAM-01']['status']='processing';p.latest['CAM-01']=(self.now,b'jpeg')
+        with patch.object(stream,'processor',p):
+            a=stream.mjpeg_generator('CAM-01');b=stream.mjpeg_generator('CAM-01')
+            self.assertIn(b'jpeg',next(a));self.assertIn(b'jpeg',next(b));a.close();b.close()
+            self.assertEqual(stream.snapshot_frame('CAM-01'),b'jpeg')
+        self.assertEqual(self.repo.observations(),[])
+
+    def test_missing_processor_source_bounded(self):
+        p=processing.Processor(cameras=[{'id':'CAM-01','kind':'vehicle'}],source=lambda _:Path(self.folder.name)/'missing.mp4')
+        p.step(p.cameras[0]);self.assertEqual(p.health()[0]['status'],'unavailable')
+        self.assertEqual(p.health()[0]['frames'],0)
+
+    def test_processor_owns_one_frame_and_records_provenance(self):
+        path=Path(self.folder.name)/'source.mp4';path.write_bytes(b'test clip identity')
+        capture=SimpleNamespace(isOpened=lambda:True,get=lambda key:25 if key==processing.cv2.CAP_PROP_FPS else 1000,
+                                set=lambda *args:True,read=lambda:(True,np.zeros((100,100,3),dtype=np.uint8)),release=lambda:None)
+        p=processing.Processor(cameras=[{'id':'CAM-01','kind':'vehicle'}],source=lambda _:path,
+                               annotator=lambda frame,kind,camera:(frame,[self.vehicle()]))
+        with patch.object(processing.cv2,'VideoCapture',return_value=capture):p.step(p.cameras[0])
+        self.assertEqual(p.health()[0]['status'],'processing')
+        read=self.repo.observations()[0]
+        self.assertEqual(read['time_basis'],'replay_clock');self.assertIn('source_sha256',read)
+        self.assertEqual(len(read['artifacts']),2)
+        self.assertTrue(p.jpeg('CAM-01')[1].startswith(b'\xff\xd8'))
+
+    def test_aggregates_do_not_truncate_at_raw_api_limit(self):
+        events.add_events([self.vehicle(self.now-i*.1,frame_id=i) for i in range(6)])
+        with patch.object(events,'MAX_EVENTS',2):
+            self.assertEqual(len(events.get_events()),2)
+            self.assertEqual(events.stats()['total_events'],6)
+            self.assertIn('1 camera-local car passages',nlquery.answer('count cars at CAM-01')['text'])
+
+    def test_unknown_camera_and_color_queries_not_silently_broadened(self):
+        events.add_events([self.plate(),self.vehicle()])
+        self.assertEqual(nlquery.answer('plates at CAM-99')['status'],'invalid')
+        self.assertEqual(nlquery.answer('red cars at CAM-01')['status'],'unsupported')
+        self.assertEqual(nlquery.answer('plates KL07AB1234 and TN22ZZ0007')['status'],'unsupported')
+
+    def test_no_duplicate_inference_owner_for_same_data_directory(self):
+        first=processing.Processor(cameras=[]);second=processing.Processor(cameras=[])
+        first.start();self.addCleanup(first.stop);self.addCleanup(second.stop)
+        with self.assertRaises(RuntimeError):second.start()
+        first.stop();second.start();second.stop()
+
+    def test_bad_capture_has_retry_backoff(self):
+        path=Path(self.folder.name)/'corrupt.mp4';path.write_bytes(b'corrupt')
+        capture=SimpleNamespace(isOpened=lambda:False,release=lambda:None)
+        p=processing.Processor(cameras=[{'id':'CAM-01','kind':'vehicle'}],source=lambda _:path)
+        with patch.object(processing.cv2,'VideoCapture',return_value=capture) as factory:
+            with self.assertLogs(processing.log,level='ERROR'):p.step(p.cameras[0])
+            p.step(p.cameras[0]);self.assertEqual(factory.call_count,1)
+        self.assertEqual(p.health()[0]['status'],'error')
+
+    def test_loop_boundary_resets_identity_and_creates_new_passage(self):
+        path=Path(self.folder.name)/'source.mp4';path.write_bytes(b'clip')
+        capture=SimpleNamespace(isOpened=lambda:True,get=lambda key:25 if key==processing.cv2.CAP_PROP_FPS else 1000,
+                                set=lambda *args:True,read=lambda:(True,np.zeros((100,100,3),dtype=np.uint8)),release=lambda:None)
+        p=processing.Processor(cameras=[{'id':'CAM-01','kind':'vehicle'}],source=lambda _:path,annotator=lambda frame,*_:(frame,[self.vehicle()]))
+        p.started=self.now;reset=Mock()
+        with patch.object(processing.cv2,'VideoCapture',return_value=capture),patch.dict(sys.modules,{'inference':SimpleNamespace(reset_camera=reset)}):
+            with patch.object(processing.time,'time',return_value=self.now+1):p.step(p.cameras[0])
+            with patch.object(processing.time,'time',return_value=self.now+41):p.step(p.cameras[0])
+        reset.assert_called_once_with('CAM-01')
+        self.assertEqual(len(self.repo.passages()),2)
+
+    def test_inference_exception_backoff_and_reconnect_create_new_session(self):
+        path=Path(self.folder.name)/'source.mp4';path.write_bytes(b'clip')
+        capture=SimpleNamespace(isOpened=lambda:True,get=lambda key:25 if key==processing.cv2.CAP_PROP_FPS else 10000,
+                                set=lambda *args:True,read=lambda:(True,np.zeros((100,100,3),dtype=np.uint8)),release=lambda:None)
+        calls=Mock(side_effect=[(np.zeros((100,100,3),dtype=np.uint8),[self.vehicle()]),OSError('Model download unavailable'),(np.zeros((100,100,3),dtype=np.uint8),[self.vehicle()])])
+        p=processing.Processor(cameras=[{'id':'CAM-01','kind':'vehicle'}],source=lambda _:path,annotator=calls);p.started=self.now;reset=Mock()
+        with patch.object(processing.cv2,'VideoCapture',return_value=capture),patch.dict(sys.modules,{'inference':SimpleNamespace(reset_camera=reset)}):
+            with patch.object(processing.time,'time',return_value=self.now+1):p.step(p.cameras[0])
+            old_session=p.health()[0]['session_id']
+            with patch.object(processing.time,'time',return_value=self.now+2),self.assertLogs(processing.log,level='ERROR'):p.step(p.cameras[0])
+            self.assertIsNone(p.jpeg('CAM-01'))
+            with patch.object(processing.time,'time',return_value=self.now+3):p.step(p.cameras[0])
+            self.assertEqual(calls.call_count,2)
+            with patch.object(processing.time,'time',return_value=self.now+13):p.step(p.cameras[0])
+        self.assertNotEqual(old_session,p.health()[0]['session_id']);reset.assert_called_once()
+        self.assertEqual(len(self.repo.passages()),2)
+
+    def test_eof_decode_failure_is_bounded_and_discards_stale_frame(self):
+        path=Path(self.folder.name)/'source.mp4';path.write_bytes(b'clip')
+        capture=SimpleNamespace(isOpened=lambda:True,get=lambda key:25 if key==processing.cv2.CAP_PROP_FPS else 1000,
+                                set=lambda *args:True,read=lambda:(False,None),release=lambda:None)
+        p=processing.Processor(cameras=[{'id':'CAM-01','kind':'vehicle'}],source=lambda _:path)
+        with patch.object(processing.cv2,'VideoCapture',return_value=capture) as factory:
+            with self.assertLogs(processing.log,level='ERROR'):p.step(p.cameras[0])
+            p.step(p.cameras[0]);self.assertEqual(factory.call_count,1)
+        self.assertEqual(p.health()[0]['status'],'error');self.assertIsNone(p.jpeg('CAM-01'))
+
+    def test_artifact_package_contains_verified_image_bytes(self):
+        ref=artifacts.save_image(np.zeros((20,20,3),dtype=np.uint8),'plate-crop')
+        events.add_events([self.plate(artifacts=[ref])]);report=events.evidence_report('KL07AB1234')
+        response=self.client.get('/api/reports/'+report['report_id']+'/package')
+        with zipfile.ZipFile(io.BytesIO(response.content)) as z:
+            data=z.read('artifacts/'+ref['sha256']+'.jpg')
+            self.assertEqual(hashlib.sha256(data).hexdigest(),ref['sha256'])
+        (artifacts.ROOT/(ref['sha256']+'.jpg')).unlink()
+        self.assertEqual(self.client.get('/api/reports/'+report['report_id']+'/package').status_code,410)
+
+    def test_evaluation_fixture_detects_errors_and_marks_synthetic(self):
+        import importlib.util
+        root=Path(__file__).resolve().parents[1]
+        spec=importlib.util.spec_from_file_location('ai26_evaluation',root/'evaluation/evaluate.py')
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        records=[json.loads(line) for line in (root/'evaluation/example.jsonl').read_text().splitlines()]
+        result=module.evaluate(records)
+        self.assertTrue(result['synthetic']);self.assertEqual(result['tracking']['id_switches'],1)
+        self.assertEqual(result['detector']['fp'],1);self.assertEqual(result['links']['fp'],1)
+        self.assertEqual(result['passages']['signed_error'],1)
+        with self.assertRaises(ValueError):module.evaluate([records[0],records[0]])
+
+if __name__=='__main__':unittest.main()

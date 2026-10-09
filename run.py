@@ -5,6 +5,7 @@
 # ///
 """Install locked dependencies and start the AI26 backend and frontend."""
 import atexit
+import argparse
 import os
 import signal
 import subprocess
@@ -17,31 +18,45 @@ PROCS: list[subprocess.Popen] = []
 
 
 def cleanup():
-    for process in PROCS:
-        if process.poll() is None:
-            process.terminate()
+    # uv and npm each spawn children. Stop the complete session so Ctrl+C and a
+    # failed sibling cannot leave Vite, Uvicorn, or inference running behind.
     for process in PROCS:
         try:
-            process.wait(timeout=5)
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    deadline = time.monotonic() + 35
+    for process in PROCS:
+        try:
+            process.wait(timeout=max(0, deadline-time.monotonic()))
         except subprocess.TimeoutExpired:
-            process.kill()
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
             process.wait()
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--skip-install', action='store_true', help='Reuse an already synced backend and frontend installation')
+    options = parser.parse_args()
+    if sys.platform != 'linux':
+        parser.error('The current shared-processor launcher requires Linux')
     atexit.register(cleanup)
     signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     backend_port = os.environ.get("AI26_BACKEND_PORT", "8001")
     frontend_port = os.environ.get("AI26_FRONTEND_PORT", "5174")
 
-    subprocess.run(["uv", "sync", "--frozen"], cwd=ROOT / "backend", check=True)
-    subprocess.run(["npm", "ci"], cwd=ROOT / "frontend", check=True)
+    if not options.skip_install:
+        subprocess.run(["uv", "sync", "--frozen"], cwd=ROOT / "backend", check=True)
+        subprocess.run(["npm", "ci"], cwd=ROOT / "frontend", check=True)
     PROCS.append(subprocess.Popen(
-        ["uv", "run", "--frozen", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", backend_port],
-        cwd=ROOT / "backend",
+        ["uv", "run", "--frozen", "--no-sync", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", backend_port],
+        cwd=ROOT / "backend", start_new_session=True,
     ))
-    PROCS.append(subprocess.Popen(["npm", "run", "dev"], cwd=ROOT / "frontend"))
+    PROCS.append(subprocess.Popen(["npm", "run", "dev"], cwd=ROOT / "frontend", start_new_session=True))
     print(f"AI26: http://localhost:{frontend_port} (API :{backend_port}). Ctrl+C to stop.", flush=True)
     while all(process.poll() is None for process in PROCS):
         time.sleep(0.2)

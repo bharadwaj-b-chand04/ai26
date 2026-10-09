@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react"
 import { MapIcon, History, TriangleAlert, ChartColumn, Gauge, MessageSquare, LayoutGrid, X, ShieldCheck } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { Page } from "@/App"
@@ -5,7 +6,7 @@ import type { Page } from "@/App"
 const NAV: { id: Page; label: string; icon: typeof MapIcon; blurb: string }[] = [
   { id: "cameras", label: "Camera Wall", icon: LayoutGrid, blurb: "Live grid + main feed" },
   { id: "map", label: "Map", icon: MapIcon, blurb: "Camera locations, Kochi" },
-  { id: "congestion", label: "Congestion", icon: Gauge, blurb: "Live load across the city" },
+  { id: "congestion", label: "Traffic activity", icon: Gauge, blurb: "Sampled track passages" },
   { id: "timeline", label: "Evidence Timeline", icon: History, blurb: "Per-camera detection log" },
   { id: "alerts", label: "Alerts", icon: TriangleAlert, blurb: "Route-anomaly rules" },
   { id: "analytics", label: "Analytics", icon: ChartColumn, blurb: "Stats + congestion map" },
@@ -23,6 +24,22 @@ export function NavDrawer({
   onNavigate: (p: Page) => void
   onClose: () => void
 }) {
+  const root = useRef<HTMLElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const previous = document.activeElement as HTMLElement | null
+    root.current?.querySelector<HTMLButtonElement>("button")?.focus()
+    const keys = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose()
+      if (e.key !== "Tab") return
+      const buttons = Array.from(root.current?.querySelectorAll<HTMLButtonElement>("button") ?? [])
+      const first=buttons[0], last=buttons.at(-1)
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last?.focus() }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first?.focus() }
+    }
+    document.addEventListener("keydown", keys)
+    return () => { document.removeEventListener("keydown", keys); previous?.focus() }
+  }, [open, onClose])
   return (
     <>
       {/* Backdrop */}
@@ -37,6 +54,9 @@ export function NavDrawer({
 
       {/* Drawer */}
       <aside
+        ref={root}
+        inert={!open}
+        aria-hidden={!open}
         className={cn(
           "fixed left-0 top-0 z-50 flex h-full w-72 flex-col border-r border-zinc-800 bg-black font-sans text-white transition-transform duration-200 ease-out select-none",
           open ? "translate-x-0" : "-translate-x-full"
@@ -113,7 +133,7 @@ export function NavDrawer({
 
         {/* Footer info */}
         <div className="border-t border-zinc-800/80 bg-zinc-950/60 px-4 py-3 text-[11px] text-zinc-500 font-sans">
-          Kochi Municipal Grid · Live Inference
+          AI26 course project · Recorded inputs
         </div>
       </aside>
     </>

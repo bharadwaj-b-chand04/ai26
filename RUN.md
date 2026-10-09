@@ -2,24 +2,34 @@
 
 ## Prerequisites
 
-- Python 3.12+ (`backend/.python-version` selects 3.12 through uv).
-- Node.js 22.12+ and npm; uv installed and on PATH.
-- Internet for dependency installation, first-use ALPR model downloads, map tiles,
-  and fonts. CPU inference is supported; CUDA is used when available.
+- Linux: the single-processor ownership lock and launcher use POSIX process groups.
+- Python 3.12 (`backend/.python-version`), `uv`, Node.js 22.12+ and npm.
+- Internet for initial dependencies/models and browser map tiles/fonts. Vehicle
+  models initialize in the background; ALPR initializes only for plate inputs.
+- The committed lock selects CPU PyTorch on Linux. GPU setup is a separate,
+  untested configuration; a normal frozen sync must not select CUDA packages.
 
-## One-command startup
+## Startup and restart
 
 ```bash
 uv run run.py
+# Subsequent starts after dependencies were installed:
+uv run run.py --skip-install
 ```
 
-The launcher installs the locked backend/frontend dependencies and runs both
-processes. Open http://localhost:5174. Ctrl+C stops both processes.
+Open http://localhost:5174. Ctrl+C or SIGTERM stops both service process groups,
+including their child processes. Allow up to 35 seconds for inference shutdown.
+Only one API worker may own a data directory. Do not use Uvicorn `--workers` or
+`--reload` with processing enabled. Stop the existing instance before restarting.
+Observations remain in SQLite; a restart creates new replay/track sessions.
 
-## Optional configuration
+The first command runs `uv sync --frozen` and `npm ci`; `--skip-install` reuses
+those installations. If the lock or package manifest changes, run the first
+command again. A process exiting stops its sibling automatically.
 
-Copy `.env.example` to `.env`, edit it, and export it **before** running the launcher.
-Neither service loads the root `.env` automatically:
+## Configuration
+
+The launcher does not load the root `.env` automatically. Export it first:
 
 ```bash
 cp .env.example .env
@@ -31,19 +41,25 @@ uv run run.py
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `AI26_BACKEND_PORT` | `8001` | Launcher API port and default frontend proxy target |
-| `AI26_FRONTEND_PORT` | `5174` | Frontend port and backend CORS origins |
-| `AI26_API_TARGET` | `http://127.0.0.1:8001` | Optional override for the frontend proxy |
-| `AI26_FOOTAGE_ROOT` | `backend/data/footage` | Original-footage root used by the camera catalog |
+| `AI26_BACKEND_PORT` | `8001` | Launcher API port and frontend proxy target |
+| `AI26_FRONTEND_PORT` | `5174` | Frontend port and API CORS origins |
+| `AI26_API_TARGET` | `http://127.0.0.1:8001` | Optional frontend proxy override |
+| `AI26_FOOTAGE_ROOT` | `backend/data/footage` | Original input root |
+| `AI26_DATA_ROOT` | `backend/data` | SQLite and content-addressed JPEG storage |
+| `AI26_PROCESSING_ENABLED` | `1` | Set `0` for API/fixture tests without models |
+| `AI26_TOTAL_INFERENCE_FPS` | `2` | Total scheduled sampling budget, clamped 0.1–10 |
+| `AI26_TIMEZONE` | `Asia/Kolkata` | Calendar/time interpretation for query intents |
 
-AI26 uses different default ports from the original project's 8000/5173, so both
-can run at the same time. Variables are namespaced to AI26.
+Sampling is sequential and skips through recorded clips using elapsed replay
+position. Two scheduled frames/second is a budget, not a guaranteed throughput.
+Health exposes actual per-camera FPS, frame age, latency and errors. No growing
+capture queue is used. The API ports differ from Godseye's 8000/5173.
 
 ## Footage
 
-The six included H.264 clips at `backend/static/playback/CAM-01.mp4` through
-`CAM-06.mp4` support playback and inference without an external footage directory.
-For CAM-07 through CAM-09, provide these files under `AI26_FOOTAGE_ROOT`:
+The six H.264 proxies `backend/static/playback/CAM-01.mp4` through `CAM-06.mp4`
+support local playback and vehicle inference. For CAM-07–09 provide these files
+under `AI26_FOOTAGE_ROOT`:
 
 ```text
 numberplate-vids/clip 4.mp4
@@ -51,52 +67,58 @@ numberplate-vids/clip_2_00_25-00_50.mp4
 numberplate-vids/clip_2_00_30-01_00.mp4
 ```
 
-Alternatively place browser-compatible H.264 MP4 files at
-`backend/static/playback/CAM-07.mp4`, `CAM-08.mp4`, and `CAM-09.mp4` locally.
-These extra clips and original footage are ignored by Git. Original filenames
-for the six vehicle cameras are in `backend/cameras.py`; original footage takes
-priority for inference, while included H.264 proxies take priority for playback.
-Camera labels and coordinates describe the supplied Kochi demo footage. If you
-replace footage, update that catalog to match your own camera locations.
+Alternatively supply H.264 MP4 proxies at `backend/static/playback/CAM-07.mp4`,
+`CAM-08.mp4`, and `CAM-09.mp4`. Additional clips and data are ignored by Git.
+Originals take precedence for inference; H.264 proxies take precedence for browser
+playback. Camera locations are demo metadata. Replacing inputs requires updating
+`backend/cameras.py` and independently validating locations and recording clocks.
 
-An unavailable camera returns HTTP 404 for video/stream instead of looping over a
-missing file. The catalog still lists all nine configured cameras. Missing plates
-or empty statistics remain empty until inference produces events.
+The nine configured cameras stay visible; availability explicitly reports six
+available and three missing until supplied. Missing video/stream returns 404;
+a present source without a fresh processed snapshot returns 503. Processing
+starts with the API, independent of which dashboard page is open.
 
 ## Separate processes
 
-Backend (default settings):
-
 ```bash
-cd backend
-uv sync --frozen
-uv run --frozen uvicorn main:app --host 127.0.0.1 --port 8001
-```
-
-Frontend (a second terminal):
-
-```bash
+# Terminal 1, repository root:
+uv sync --frozen --directory backend
+uv run --frozen --directory backend uvicorn main:app --host 127.0.0.1 --port 8001
+# Terminal 2:
 cd frontend
 npm ci
 npm run dev
 ```
 
-Check http://127.0.0.1:8001/api/cameras and http://127.0.0.1:8001/docs.
-Model initialization is deferred until a stream or snapshot needs inference.
+API catalog: http://127.0.0.1:8001/api/cameras; processing health:
+http://127.0.0.1:8001/api/health; interactive docs: http://127.0.0.1:8001/docs.
+A production frontend needs separate `/api` routing; Vite's proxy is development
+configuration. Model/capture failures appear in health and retry after 10 seconds.
 
-## Checks
+## Checks and evaluation
 
 ```bash
-python -m unittest discover -s tests -v
-python -m compileall -q backend run.py
+uv run --frozen --directory backend python -m unittest discover -s ../tests -v
+python evaluation/evaluate.py --records evaluation/example.jsonl --output evaluation/results/fixture.json
 cd frontend
 npm run lint
 npm run build
 ```
 
-The unit checks exercise backend logic without loading ML models. They do not
-measure detector or OCR accuracy. A production frontend host must route `/api`
-to the backend; Vite's proxy is for development only.
+Tests disable background inference and use temporary databases and deterministic
+fixtures. The evaluation example is explicitly synthetic; its metrics prove the
+metric implementation, not real detector/OCR accuracy. See `evaluation/README.md`
+for the labeled JSONL format. Do not recursively compile the backend virtualenv.
+
+## Data and exports
+
+The database and artifacts are local, ignored files. Back up the data directory
+with the API stopped (SQLite uses WAL while running). Default views cover the last
+five minutes; explicit date/time queries access retained history. Observations
+and source JPEG derivatives are cleaned after seven days, reports expire after
+24 hours. Near the source-retention boundary a report artifact may expire first;
+the ZIP endpoint reports missing/expired artifacts rather than producing an
+apparently complete package. Reports are local snapshots, not signed evidence.
 
 ## Static walkthrough
 
@@ -104,5 +126,5 @@ to the backend; Vite's proxy is for development only.
 python -m http.server 8080 --directory demo
 ```
 
-Open http://localhost:8080. This version uses synthetic events and simulated
-queries. It needs no backend or ML models; its CDN maps/charts require internet.
+http://localhost:8080 uses synthetic events and simulated queries, without the
+backend/models. Its CDN maps/charts need internet.

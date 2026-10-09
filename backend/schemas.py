@@ -1,0 +1,51 @@
+"""Validation shared by HTTP and ingestion; no model loading required."""
+from typing import Literal
+from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
+import math
+
+class Observation(BaseModel):
+    model_config = ConfigDict(extra='allow', allow_inf_nan=False)
+    camera_id: StrictStr
+    kind: Literal['vehicle', 'plate']
+    confidence: float = Field(ge=0, le=1)
+    bbox: tuple[int, int, int, int]
+    ts: float
+    session_id: str | None = None
+    track_id: int | None = None
+
+    @field_validator('bbox')
+    @classmethod
+    def check_box(cls, v):
+        if v[2] < v[0] or v[3] < v[1]: raise ValueError('Invalid bounding box')
+        return v
+
+class QueryRequest(BaseModel):
+    question: StrictStr = Field(min_length=1, max_length=500)
+    @field_validator('question')
+    @classmethod
+    def nonblank(cls, value):
+        if not value.strip(): raise ValueError('Enter a question')
+        return value.strip()
+
+class ReviewRequest(BaseModel):
+    state: Literal['acknowledged', 'dismissed', 'reviewed', 'open']
+    reviewer: StrictStr = Field(min_length=1, max_length=100)
+    note: StrictStr = Field(default='', max_length=1000)
+
+class ZoneRule(BaseModel):
+    camera_id: str
+    # normalized image coordinates: left, top, right, bottom
+    zone: tuple[float, float, float, float]
+    dwell_seconds: float = Field(default=30, ge=10, le=3600)
+    max_gap_seconds: float = Field(default=5, ge=1, le=60)
+    @field_validator('zone')
+    @classmethod
+    def valid_zone(cls, v):
+        if any(not math.isfinite(x) or x<0 or x>1 for x in v) or v[0]>=v[2] or v[1]>=v[3]:
+            raise ValueError('Zone must be a normalized positive rectangle')
+        return v
+
+class RuleConfig(BaseModel):
+    watchlist: dict[str, str] = Field(default_factory=dict)
+    restricted_cameras: list[str] = Field(default_factory=list)
+    dwell_zones: list[ZoneRule] = Field(default_factory=list)

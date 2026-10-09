@@ -2,61 +2,122 @@
 
 ## Data path
 
-1. `cameras.py` resolves original footage and local playback proxies.
-2. `/api/video/{camera_id}` serves MP4s for the camera wall without inference.
-3. `/api/stream/{camera_id}` reads and annotates the focused camera. YOLO recognizes
-   vehicles; Fast-ALPR reads plates. Models load on the first inference request.
-4. `tracking.py` assigns per-camera IDs using greedy centroid matching.
-5. `plate_format.py` normalizes Indian registration plates and records OCR repairs.
-   `inference.py` uses a recent per-camera vote for the displayed OCR label; raw
-   reads and normalized strings remain available in each detection event.
-6. `events.py` stores detections under a thread lock and computes statistics,
-   trajectory links, alerts, and JSON evidence reports.
-7. React fetches the API and displays camera, map, congestion, timeline, alerts,
-   analytics, and query views.
+1. `cameras.py` resolves input files and proxy playback, with explicit availability.
+2. FastAPI lifespan starts one `processing.Processor`. A Linux advisory lock
+   prevents a second owner of the same data directory. Sequential bounded sampling
+   covers every available source without a browser request or growing queue.
+3. `inference.py` runs YOLO and, for plate inputs, lazy Fast-ALPR. Local centroid
+   IDs and OCR consensus are scoped to camera/session/track and reset on replay
+   loops. Three consistent normalized reads support an identity; conflicting
+   reads abstain. Invalid/low-confidence OCR stays in raw history.
+4. Typed ingestion writes immutable frame reads and camera-local passage summaries
+   to SQLite WAL. Retries of the same session/frame/kind/track are idempotent.
+   A contradictory supported identity invalidates its passage for identity queries.
+5. The processor saves selected unannotated-frame/crop JPEG derivatives with
+   SHA-256 references. Observations contain replay position, processing time,
+   session/frame IDs, source clip digest, and model/version metadata. YOLO records
+   checkpoint and pipeline digests; exact ALPR weight digests remain pending.
+6. Stream/snapshot endpoints read cached annotated JPEGs. MP4 playback never runs
+   inference. Health reports availability, errors, FPS, frame age and latency.
+7. Repository services derive interval statistics, candidate journeys, editable
+   local rules, persistent human review and immutable report snapshots. React
+   polls those services and separates explicit walkthroughs from API results.
+
+## Contracts and persistence
+
+`schemas.py` validates finite timestamps/confidence, ordered boxes, query strings
+and rule configuration. Invalid requests return a consistent JSON error envelope.
+SQLite schema version 1 has sessions, observations, passages, alerts, reports,
+settings and audit tables; unknown future versions fail rather than silently open.
+The camera catalog is still code configuration and journey links are derived,
+not independently migrated persistent models. The repository is intended for a
+single local API process, not a distributed ingestion deployment.
+
+A read ID identifies an immutable model observation. A passage ID combines camera,
+replay session, model kind and local track. Plate and vehicle tracks remain
+separate; their association has not been validated. A vehicle passage is counted
+once when at least one observation falls in the interval. It is not a unique
+city-wide vehicle. Raw reads are API-limited to 5,000; SQL aggregate queries do
+not inherit that limit. Default windows expire at read time even if no data arrives.
+
+`ts` is replay observation time; `source_time_seconds` is position in the clip;
+`processed_at` is the processing completion time. Original capture timestamps are
+unknown. Cross-camera replay clocks cannot support physical travel-time inference.
+Those links remain unresolved candidates. For supplied calibrated observations,
+the baseline uses exact plate equality and a fixed straight-line speed gate;
+accepted links still do not prove identity. Rejected links and mixed routes require
+review, with null speed for equal/nonpositive timestamps.
 
 ## API
 
 | Method | Route | Output |
 | --- | --- | --- |
-| GET | `/api/cameras` | Configured camera metadata (without filesystem paths) |
-| GET | `/api/video/{camera_id}` | Browser playback MP4 |
-| GET | `/api/stream/{camera_id}` | Annotated MJPEG stream |
-| GET | `/api/snapshot/{camera_id}` | Annotated JPEG or 204 if unavailable |
-| GET | `/api/events?camera=…&plate=…` | Filtered detection events |
-| GET | `/api/stats` | Counts and mean confidence |
-| GET | `/api/alerts` | Computed prototype rule alerts |
-| GET | `/api/trajectory/{plate}` | Observations, accepted and rejected links |
-| POST | `/api/evidence/{plate}` | JSON report with a SHA-256 package hash |
-| POST | `/api/nlquery` | Keyword-based answer for `{"question": "…"}` |
+| GET | `/api/cameras`, `/api/health` | Catalog availability and actual processor health |
+| GET | `/api/video/{camera}`, `/api/stream/{camera}` | MP4 playback / shared annotated MJPEG |
+| GET | `/api/snapshot/{camera}` | Fresh annotated JPEG; 404 missing or 503 not ready |
+| GET | `/api/events` | Raw reads; camera/plate/time/kind filters and bounded limit |
+| GET | `/api/stats`, `/api/flows` | Frame/passages counts, confidence, computed accepted-link flows |
+| GET | `/api/trajectory/{plate}` | Supported observations, accepted/rejected/unresolved links |
+| GET | `/api/alerts`, `/api/rules` | Persistent rule alerts / current local configuration |
+| PUT | `/api/rules` | Validated persistent watchlist, camera zones, dwell zones |
+| POST | `/api/alerts/{id}/review` | Acknowledgement/review/disposition with history |
+| POST | `/api/nlquery` | Supported deterministic intent or explicit unsupported response |
+| POST | `/api/evidence/{plate}` | Immutable versioned report; empty interval rejected |
+| GET | `/api/reports/{id}` | Stored JSON attachment, hash-checked and expiry-enforced |
+| GET | `/api/reports/{id}/package`, `/print` | Verified artifact ZIP / dedicated printable snapshot |
+| GET | `/api/artifacts/{sha256}` | Verified JPEG derivative or missing/corrupt error |
 
-## Boundaries
+Interval-capable routes accept UTC epoch `since`/`until`. Query dates use
+`AI26_TIMEZONE`, not the browser's accidental timezone. Supported query grammar
+includes one plate/camera, vehicle class, busiest camera, alerts and simple
+calendar/time bounds. Multiple identities/clocks and unsupported colors/congestion
+are rejected rather than silently broadening a query. There is no LLM, fake SQL,
+government registry, permit database or measured congestion classifier.
 
-- Six vehicle clips are included; three plate clips require local configuration.
-  Recorded inputs loop. Only an actively requested inference stream/snapshot adds
-  detections, so this is not simultaneous inference over nine cameras.
-- The five-minute/5,000-event buffer is process-local. Time pruning occurs on new
-  detections; records can remain when inference stops. No database or background
-  ingestion service is implemented.
-- Trajectory links compare consecutive observations using straight-line distance
-  and a fixed 160 km/h threshold. They are candidate links, not proof of identity.
-- Plate OCR voting is shared per camera, not isolated per vehicle track. Centroid
-  tracking is a baseline and can fail under occlusion.
-- Cross-camera vehicle alerts compare class labels rather than learned appearance
-  embeddings. Loitering rules count detections rather than verified visits.
-- Congestion is a prototype visualization over detection activity, not a calibrated
-  traffic measurement or learned baseline. Some views include labeled walkthroughs.
-- Watchlist and restricted-zone entries are mock configuration. Plate-format
-  validation is not registry verification. No VAHAN integration is implemented.
-- Query responses come from Python keyword rules. Example SQL is explanatory;
-  no SQL engine or LLM executes queries.
-- Evidence hashes cover the JSON package. Reports are not digitally signed,
-  persistent chain-of-custody packages, or certified legal evidence. Retention
-  expiry is not enforced.
+## Alerts and traffic
 
-## Course development
+Watchlist rules are editable local matches; initial entries are labeled examples.
+Restricted-camera rules mean a zone sighting, not an unauthorized-access finding.
+Dwell requires one local track inside a configured normalized rectangle over an
+elapsed duration, at least three samples, and bounded inter-sample gaps. Exits and
+gaps reset it. Review is persistent, but reviewer names are local claims without
+authentication or external escalation. Class-only cross-camera re-identification
+and six-frame loitering are removed.
 
-Evaluate detector precision/recall, plate exact-match accuracy, tracker ID switches,
-and trajectory-link precision separately on held-out footage. Report sample counts,
-conditions, and failure cases. Database persistence, stronger tracking, and a
-validated multi-camera identity model can be developed independently in AI26.
+Analytics separate raw frame reads, camera-local sampled passages, model confidence
+and available/fresh-processing cameras. Accepted-link flows are computed, not fixed
+example rows. Activity-map counts do not claim calibrated congestion, occupancy,
+road density, traffic speed or historical weekday/hour baselines.
+
+## Reports and retention
+
+Each report stores its exact interval, deduplicated supporting observations, all
+raw reads from those passages, raw/canonical OCR, link decisions, artifact references,
+provenance, timestamps and limitations. More than 5,000 raw reads requires a shorter
+interval. JSON, ZIP and print use that snapshot, regardless of subsequent reads.
+SHA-256 hashes canonical JSON excluding its own hash field; artifact bytes must
+match their referenced digests. Packages over 64 MiB are refused. Print contains
+both passage observations and supporting raw reads, rather than the dashboard.
+
+Reports expire after 24 hours. Seven-day observation/artifact cleanup runs from
+the processor; expiry checks still prevent access when processing is disabled.
+Source JPEG lifetime is independent of report lifetime; a package can return 410
+near the source-retention boundary. A model input frame is a decoded JPEG
+**derivative**, not the original recording. The source clip digest identifies that
+recording. Hashes are not signatures, authenticated chain of custody, or proof of
+correct OCR. Report accesses and review changes receive local audit records;
+access controls, tamper-resistant audit storage and signing remain pending.
+
+## Validation and remaining gates
+
+Unit/contract tests use temporary storage and deterministic fixtures. The
+`evaluation/` CLI measures box precision/recall, exact OCR strings/abstentions,
+ID switches, link/rule decisions and passage error. Its example is synthetic and
+cannot establish real accuracy. Track fragmentation, held-out splits, measured
+fusion gains, calibration, labeled adverse conditions, original recording clocks,
+and sustained target-hardware benchmarks remain release gates.
+
+See `PROGRESS.md` for every task from the implementation plan. Core engineering
+improvements do not satisfy missing-footage accuracy gates. Optional restoration,
+learned identity/topology, RTSP integration and production deployment remain
+separate, unimplemented work packages.

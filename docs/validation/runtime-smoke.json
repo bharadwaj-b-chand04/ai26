@@ -1,0 +1,277 @@
+{
+  "before_start": {
+    "observations": 863,
+    "sample_ids": [
+      "5cc98b6e0d2321e6fabf58fbd3cf36f0",
+      "bcc9e5716ecd990d195f09c3a547fbf5",
+      "88d22259edadcfe8cd2ba0d795d94123",
+      "a9d4865856fa5fa93f12282b3059b7d4",
+      "8e9e9bff60240bc022c9218a8b380073",
+      "35d21e5845ddd31af18dfa9c6b51f5e4",
+      "758effc2f8c1e615fd8407afc8aa4bf7",
+      "622dab3af5c8f9743f7d2a75d0104439",
+      "83d1acf88568d04e9775b5ecdfada83c",
+      "c04814a9b503705b85b66b599e63a41a"
+    ]
+  },
+  "ui_fixture_report": {
+    "synthetic": true,
+    "isolated_port": 5175,
+    "json_downloaded": true,
+    "zip_downloaded": true,
+    "manifest_hash_verified": true,
+    "zip_artifact_hashes_verified": true,
+    "print_observations": 2,
+    "supporting_raw_reads": 2
+  },
+  "fixture_clean_shutdown": true,
+  "before_restart": {
+    "count": 1045
+  },
+  "main_clean_shutdown": true,
+  "restart_persistence": {
+    "retained_sample_ids": 10,
+    "sample_ids_checked": 10,
+    "count_after_restart": 1047
+  },
+  "health_after_restart": {
+    "processing_enabled": true,
+    "cameras": [
+      {
+        "camera_id": "CAM-01",
+        "status": "processing",
+        "frames": 1,
+        "last_frame_at": 1791520071.939154,
+        "last_event_at": null,
+        "error": null,
+        "source_available": true,
+        "queue_depth": 0,
+        "source_mode": "recorded",
+        "time_basis": "replay_clock",
+        "latency_ms": 3682.4,
+        "session_id": "dfa7b309670143889aad2c99b1d0c58e:CAM-01:0:capture-1",
+        "frame_id": 115,
+        "source_time_seconds": 4.6,
+        "frame_age_seconds": 2.3,
+        "processed_fps": 0.161,
+        "inference_owner": "single-process round-robin",
+        "sampling_budget_fps": 2.0
+      },
+      {
+        "camera_id": "CAM-02",
+        "status": "processing",
+        "frames": 1,
+        "last_frame_at": 1791520072.1858065,
+        "last_event_at": 1791520072.1858065,
+        "error": null,
+        "source_available": true,
+        "queue_depth": 0,
+        "source_mode": "recorded",
+        "time_basis": "replay_clock",
+        "latency_ms": 148.4,
+        "session_id": "dfa7b309670143889aad2c99b1d0c58e:CAM-02:0:capture-1",
+        "frame_id": 322,
+        "source_time_seconds": 12.88,
+        "frame_age_seconds": 2.05,
+        "processed_fps": 0.161,
+        "inference_owner": "single-process round-robin",
+        "sampling_budget_fps": 2.0
+      },
+      {
+        "camera_id": "CAM-03",
+        "status": "processing",
+        "frames": 1,
+        "last_frame_at": 1791520072.6704738,
+        "last_event_at": null,
+        "error": null,
+        "source_available": true,
+        "queue_depth": 0,
+        "source_mode": "recorded",
+        "time_basis": "replay_clock",
+        "latency_ms": 68.9,
+        "session_id": "dfa7b309670143889aad2c99b1d0c58e:CAM-03:0:capture-1",
+        "frame_id": 447,
+        "source_time_seconds": 17.88,
+        "frame_age_seconds": 1.57,
+        "processed_fps": 0.161,
+        "inference_owner": "single-process round-robin",
+        "sampling_budget_fps": 2.0
+      },
+      {
+        "camera_id": "CAM-04",
+        "status": "processing",
+        "frames": 1,
+        "last_frame_at": 1791520073.1387184,
+        "last_event_at": null,
+        "error": null,
+        "source_available": true,
+        "queue_depth": 0,
+        "source_mode": "recorded",
+        "time_basis": "replay_clock",
+        "latency_ms": 77.9,
+        "session_id": "dfa7b309670143889aad2c99b1d0c58e:CAM-04:0:capture-1",
+        "frame_id": 572,
+        "source_time_seconds": 22.88,
+        "frame_age_seconds": 1.1,
+        "processed_fps": 0.161,
+        "inference_owner": "single-process round-robin",
+        "sampling_budget_fps": 2.0
+      },
+      {
+        "camera_id": "CAM-05",
+        "status": "processing",
+        "frames": 1,
+        "last_frame_at": 1791520073.653394,
+        "last_event_at": 1791520073.653394,
+        "error": null,
+        "source_available": true,
+        "queue_depth": 0,
+        "source_mode": "recorded",
+        "time_basis": "replay_clock",
+        "latency_ms": 97.3,
+        "session_id": "dfa7b309670143889aad2c99b1d0c58e:CAM-05:0:capture-1",
+        "frame_id": 697,
+        "source_time_seconds": 27.88,
+        "frame_age_seconds": 0.58,
+        "processed_fps": 0.161,
+        "inference_owner": "single-process round-robin",
+        "sampling_budget_fps": 2.0
+      },
+      {
+        "camera_id": "CAM-06",
+        "status": "processing",
+        "frames": 1,
+        "last_frame_at": 1791520074.132644,
+        "last_event_at": null,
+        "error": null,
+        "source_available": true,
+        "queue_depth": 0,
+        "source_mode": "recorded",
+        "time_basis": "replay_clock",
+        "latency_ms": 76.7,
+        "session_id": "dfa7b309670143889aad2c99b1d0c58e:CAM-06:0:capture-1",
+        "frame_id": 822,
+        "source_time_seconds": 32.88,
+        "frame_age_seconds": 0.1,
+        "processed_fps": 0.161,
+        "inference_owner": "single-process round-robin",
+        "sampling_budget_fps": 2.0
+      },
+      {
+        "camera_id": "CAM-07",
+        "status": "idle",
+        "frames": 0,
+        "last_frame_at": null,
+        "last_event_at": null,
+        "error": null,
+        "source_available": false,
+        "queue_depth": 0,
+        "source_mode": "recorded",
+        "time_basis": "replay_clock",
+        "frame_age_seconds": null,
+        "processed_fps": 0.0,
+        "inference_owner": "single-process round-robin",
+        "sampling_budget_fps": 2.0
+      },
+      {
+        "camera_id": "CAM-08",
+        "status": "idle",
+        "frames": 0,
+        "last_frame_at": null,
+        "last_event_at": null,
+        "error": null,
+        "source_available": false,
+        "queue_depth": 0,
+        "source_mode": "recorded",
+        "time_basis": "replay_clock",
+        "frame_age_seconds": null,
+        "processed_fps": 0.0,
+        "inference_owner": "single-process round-robin",
+        "sampling_budget_fps": 2.0
+      },
+      {
+        "camera_id": "CAM-09",
+        "status": "idle",
+        "frames": 0,
+        "last_frame_at": null,
+        "last_event_at": null,
+        "error": null,
+        "source_available": false,
+        "queue_depth": 0,
+        "source_mode": "recorded",
+        "time_basis": "replay_clock",
+        "frame_age_seconds": null,
+        "processed_fps": 0.0,
+        "inference_owner": "single-process round-robin",
+        "sampling_budget_fps": 2.0
+      }
+    ],
+    "database_schema": 1,
+    "scope": "single API process; run uvicorn with one worker"
+  },
+  "decoded_snapshots": {
+    "CAM-01": {
+      "width": 960,
+      "height": 540,
+      "jpeg_bytes": 140998
+    },
+    "CAM-02": {
+      "width": 960,
+      "height": 540,
+      "jpeg_bytes": 170896
+    },
+    "CAM-03": {
+      "width": 960,
+      "height": 540,
+      "jpeg_bytes": 173523
+    },
+    "CAM-04": {
+      "width": 960,
+      "height": 540,
+      "jpeg_bytes": 169978
+    },
+    "CAM-05": {
+      "width": 960,
+      "height": 540,
+      "jpeg_bytes": 170012
+    },
+    "CAM-06": {
+      "width": 960,
+      "height": 540,
+      "jpeg_bytes": 159626
+    }
+  },
+  "runtime": {
+    "python": "3.12.14",
+    "cpu": "12th Gen Intel(R) Core(TM) i5-12450H",
+    "logical_cpus": 12,
+    "torch": "2.14.0+cpu",
+    "cuda_available": false,
+    "api_rss_mib": 705.7,
+    "scope": "short smoke sample, not sustained throughput/accuracy benchmark"
+  },
+  "ui_checks": {
+    "mobile_width": 390,
+    "mobile_height": 844,
+    "camera_wall_no_horizontal_overflow": true,
+    "investigation_no_horizontal_overflow": true,
+    "alerts_no_horizontal_overflow": true,
+    "unknown_plate_export_disabled": true,
+    "navigation_focus_trap": true,
+    "navigation_escape_restores_focus": true,
+    "viewport_override_reset": true,
+    "query_today_retained_history": true,
+    "camera_change_recovers_missing_feed": true
+  },
+  "checked_at_utc": "2026-10-09T04:31:03.355401+00:00",
+  "backend_regressions": {
+    "passed": 49,
+    "failed": 0,
+    "scope": "deterministic isolated fixtures; no ML accuracy claim"
+  },
+  "frontend_checks": {
+    "lint": "passed",
+    "existing_fast_refresh_warnings": 2,
+    "typescript_vite_build": "passed"
+  }
+}

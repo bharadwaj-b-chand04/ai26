@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { Menu, ShieldCheck } from "lucide-react"
 import { getCameras, type Camera } from "@/lib/api"
 import { CameraWall } from "@/components/CameraWall"
@@ -17,7 +17,7 @@ export type Page = "cameras" | "map" | "congestion" | "timeline" | "alerts" | "a
 const TITLES: Record<Page, string> = {
   cameras: "Camera Wall",
   map: "Map",
-  congestion: "Congestion",
+  congestion: "Traffic activity",
   timeline: "Evidence Timeline",
   alerts: "Alerts",
   analytics: "Analytics",
@@ -35,12 +35,16 @@ export default function App() {
   const [introVisible, setIntroVisible] = useState(true)
 
   useEffect(() => {
-    getCameras().then((c) => {
-      setCameras(c)
-      if (c.length) setFocused(c[0].id)
-    }).catch((error: Error) => setCameraError(error.message))
+    let alive = true
+    const tick = () => getCameras().then((c) => {
+      if (alive) { setCameras(c); setCameraError(null) }
+    }).catch((error: Error) => alive && setCameraError(error.message))
+    tick()
+    const timer = setInterval(tick, 3000)
+    return () => { alive = false; clearInterval(timer) }
   }, [])
 
+  const closeNavigation = useCallback(() => setDrawerOpen(false), [])
   const focusedCam = cameras.find((c) => c.id === focused)
 
   function navigate(p: Page) {
@@ -75,18 +79,18 @@ export default function App() {
         </button>
         <div className="flex flex-none items-center gap-2">
           <span className="hidden md:inline-flex items-center rounded-md border border-zinc-800 bg-zinc-900/80 px-2.5 py-1 text-xs font-sans font-medium text-zinc-400">
-            Recorded input / live inference
+            Recorded inputs / shared processing
           </span>
           <span className="hidden sm:inline-flex items-center rounded-md border border-zinc-800 bg-zinc-900/80 px-2.5 py-1 text-xs font-sans font-medium text-zinc-400">
-            Mock registry / not VAHAN
+            Plate format / no registry verification
           </span>
           <span className="inline-flex items-center gap-1.5 rounded-md border border-white/20 bg-zinc-900 px-2.5 py-1 text-xs font-sans font-medium text-zinc-200">
-            <span className="h-1.5 w-1.5 rounded-full bg-white" /> {cameras.length}/9 cams
+            <span className="h-1.5 w-1.5 rounded-full bg-white" /> {cameras.filter((c) => c.source_available).length}/{cameras.length} sources available
           </span>
         </div>
       </header>
 
-      <NavDrawer open={drawerOpen} page={page} onNavigate={navigate} onClose={() => setDrawerOpen(false)} />
+      <NavDrawer open={drawerOpen} page={page} onNavigate={navigate} onClose={closeNavigation} />
 
       <main className="min-h-0 flex-1">
         {cameraError && <div className="absolute left-1/2 top-16 z-30 -translate-x-1/2 rounded-md border border-red-400/30 bg-red-950/90 px-3 py-2 text-xs text-red-100">Camera API unavailable: {cameraError}</div>}

@@ -1,249 +1,188 @@
+"""Durable observation services; rolling views expire on every read, not only ingestion."""
 import hashlib
-import json
-import threading
+import os
 import time
 import uuid
+from pathlib import Path
+from math import asin, cos, radians, sin, sqrt
+from collections import Counter
 
 from cameras import CAMERAS_BY_ID
 from plate_format import normalize_plate
+from repository import Repository, canonical_json
+from schemas import Observation
 
-_lock = threading.Lock()
-_log: list[dict] = []
 MAX_EVENTS = 5000
-# The footage loops forever for the demo, so without a rolling window every stat here would
-# climb toward infinity the longer the app stays open. Bound everything to the last 5 minutes
-# of real activity instead — "live", not "cumulative since server start".
 WINDOW_SECONDS = 300
 MAX_TRAVEL_SPEED_KMH = 160
-WATCHLIST = {
-    "KL07AB1234": {
-        "severity": "critical",
-        "reason": "Mock stolen-vehicle case KOC-2291",
-    },
-}
-RESTRICTED_CAMERAS = {
-    "CAM-09": "Mock restricted corridor at Petta Junction",
-}
+RETENTION_SECONDS = 7 * 86400
+REPORT_RETENTION_SECONDS = 86400
+store = Repository(Path(os.environ.get('AI26_DATA_ROOT', Path(__file__).parent / 'data')) / 'ai26.sqlite3')
+DEFAULT_RULES = {'watchlist': {'KL07AB1234': 'Local example watchlist entry; human review required'},
+                 'restricted_cameras': ['CAM-09'], 'dwell_zones': []}
 
 
-def add_events(detections: list[dict]):
-    if not detections:
-        return
-    with _lock:
-        _log.extend(detections)
-        cutoff = time.time() - WINDOW_SECONDS
-        while _log and _log[0]["ts"] < cutoff:
-            _log.pop(0)
-        if len(_log) > MAX_EVENTS:
-            del _log[: len(_log) - MAX_EVENTS]
+def add_events(detections):
+    validated = []
+    for raw in detections:
+        event = Observation.model_validate(raw).model_dump(exclude_none=True)
+        if event['camera_id'] not in CAMERAS_BY_ID: raise ValueError('Unknown camera in observation')
+        if event['kind'] == 'plate':
+            normalized = normalize_plate(event.get('plate_norm') or event.get('plate', ''))
+            if not normalized['format_valid']:
+                if event.get('identity_status') not in ('invalid','low_confidence'): raise ValueError('Invalid canonical plate')
+                event['plate'] = event['plate_norm'] = None
+            else:
+                event['plate'] = event['plate_norm'] = str(normalized['plate_norm'])
+        validated.append(event)
+    return store.ingest(validated)
 
 
-def get_events(camera_id: str | None = None, plate: str | None = None, since: float | None = None):
-    with _lock:
-        snapshot = list(_log)
-    if camera_id:
-        snapshot = [e for e in snapshot if e["camera_id"] == camera_id]
-    if plate:
-        plate_norm = str(normalize_plate(plate)["plate_norm"])
-        snapshot = [e for e in snapshot if e.get("plate_norm", e.get("plate", "")).upper() == plate_norm]
-    if since:
-        snapshot = [e for e in snapshot if e["ts"] >= since]
-    return snapshot
+def get_events(camera_id=None, plate=None, since=None, until=None, kind=None, limit=None):
+    normalized = str(normalize_plate(plate)['plate_norm']) if plate else None
+    return store.observations(camera_id, normalized, time.time()-WINDOW_SECONDS if since is None else since,
+                              time.time() if until is None else until, kind, limit or MAX_EVENTS)
 
 
-def _distance_km(first: dict, second: dict) -> float:
-    from math import asin, cos, radians, sin, sqrt
-
-    a = CAMERAS_BY_ID[first["camera_id"]]
-    b = CAMERAS_BY_ID[second["camera_id"]]
-    lat1, lat2 = radians(a["lat"]), radians(b["lat"])
-    dlat = lat2 - lat1
-    dlon = radians(b["lon"]) - radians(a["lon"])
-    h = sin(dlat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(dlon / 2) ** 2
-    return 6371 * 2 * asin(sqrt(h))
+def _distance_km(first, second):
+    a, b = CAMERAS_BY_ID[first['camera_id']], CAMERAS_BY_ID[second['camera_id']]
+    lat1, lat2 = radians(a['lat']), radians(b['lat'])
+    h = sin((lat2-lat1)/2)**2 + cos(lat1)*cos(lat2)*sin(radians(b['lon']-a['lon'])/2)**2
+    return 6371 * 2 * asin(min(1, sqrt(h)))
 
 
-def build_trajectory(observations: list[dict]) -> dict:
-    """Build a small explainable trajectory from normalized plate observations."""
-    ordered = sorted(observations, key=lambda event: event["ts"])
+def build_trajectory(observations):
+    ordered = sorted(observations, key=lambda e: e['ts'])
     hops = []
-    accepted_links = []
-    rejected_links = []
     for event in ordered:
-        camera = CAMERAS_BY_ID.get(event["camera_id"], {})
-        hops.append({
-            "camera_id": event["camera_id"],
-            "location": camera.get("location", "Unknown"),
-            "location_confirmed": camera.get("location_confirmed", False),
-            "lat": camera.get("lat"),
-            "lon": camera.get("lon"),
-            "ts": event["ts"],
-            "confidence": event.get("confidence", 0),
-            "plate": event.get("plate"),
-            "plate_raw": event.get("plate_raw"),
-            "repairs": event.get("repairs", []),
-            "bbox": event.get("bbox"),
-        })
-
-    for first, second in zip(ordered, ordered[1:]):
-        if first["camera_id"] == second["camera_id"]:
-            continue
-        elapsed = second["ts"] - first["ts"]
+        camera = CAMERAS_BY_ID.get(event['camera_id'], {})
+        hops.append({**event, 'location': camera.get('location', 'Unknown'),
+                     'location_confirmed': camera.get('location_confirmed', False),
+                     'lat': camera.get('lat'), 'lon': camera.get('lon'),
+                     'repairs': event.get('repairs', [])})
+    accepted, rejected, candidates = [], [], []
+    for first, second in zip(hops, hops[1:]):
+        if first['camera_id'] == second['camera_id']: continue
+        elapsed = second['ts'] - first['ts']
         distance = _distance_km(first, second)
-        implied_speed = distance / (elapsed / 3600) if elapsed > 0 else float("inf")
-        link = {
-            "from_camera_id": first["camera_id"],
-            "to_camera_id": second["camera_id"],
-            "from_ts": first["ts"],
-            "to_ts": second["ts"],
-            "distance_km": round(distance, 3),
-            "elapsed_seconds": round(max(elapsed, 0), 3),
-            "implied_speed_kmh": round(implied_speed, 1),
-        }
-        if elapsed <= 0 or implied_speed > MAX_TRAVEL_SPEED_KMH:
-            rejected_links.append({
-                **link,
-                "reason": f"impossible travel: {implied_speed:.1f} km/h implied; limit {MAX_TRAVEL_SPEED_KMH} km/h",
-            })
+        speed = distance * 3600 / elapsed if elapsed > 0 else None
+        link = {'from_camera_id': first['camera_id'], 'to_camera_id': second['camera_id'],
+                'from_ts': first['ts'], 'to_ts': second['ts'], 'distance_km': round(distance, 3),
+                'elapsed_seconds': round(elapsed, 3), 'implied_speed_kmh': round(speed, 1) if speed is not None else None,
+                'from_passage_id': first.get('passage_id'), 'to_passage_id': second.get('passage_id'), 'method': 'exact_plate'}
+        # Recorded playback time is not original synchronized capture time.
+        uncalibrated = not first['location_confirmed'] or not second['location_confirmed'] or any(
+            e.get('time_basis') == 'replay_clock' for e in (first, second))
+        if elapsed <= 0:
+            rejected.append({**link, 'reason': 'nonpositive elapsed time; transition cannot be established'})
+        elif uncalibrated:
+            candidates.append({**link, 'implied_speed_kmh': None, 'reason': 'Location or original capture-time calibration unavailable'})
+        elif speed > MAX_TRAVEL_SPEED_KMH:
+            rejected.append({**link, 'reason': f'impossible travel: {speed:.1f} km/h implied; limit {MAX_TRAVEL_SPEED_KMH} km/h'})
         else:
-            accepted_links.append(link)
-
-    status = "not_found" if not hops else "observed"
-    if accepted_links:
-        status = "confirmed"
-    elif rejected_links:
-        status = "cloning_candidate"
-    return {
-        "mode": "live",
-        "status": status,
-        "plate": ordered[0].get("plate_norm", "") if ordered else "",
-        "observations": hops,
-        "accepted_links": accepted_links,
-        "rejected_links": rejected_links,
-    }
+            accepted.append({**link, 'reason': 'Exact plate and baseline travel gate; identity remains unverified'})
+    status = 'not_found' if not hops else 'observed'
+    if accepted or candidates: status = 'candidate'
+    if rejected: status = 'review_required'
+    return {'mode': 'live', 'source_mode': ordered[0].get('source_mode', 'manual') if ordered else None,
+            'status': status, 'plate': ordered[0].get('plate_norm', '') if ordered else '',
+            'observations': hops, 'accepted_links': accepted, 'rejected_links': rejected, 'candidate_links': candidates}
 
 
-def get_trajectory(plate: str) -> dict:
-    normalized = str(normalize_plate(plate)["plate_norm"])
-    result = build_trajectory(get_events(plate=normalized))
-    result["plate"] = normalized
+def get_trajectory(plate, since=None, until=None):
+    normalized = str(normalize_plate(plate)['plate_norm'])
+    start = time.time()-WINDOW_SECONDS if since is None else since
+    end = time.time() if until is None else until
+    result = build_trajectory(store.supported_passage_reads(normalized, start, end))
+    result['plate'] = normalized
+    result['interval'] = {'since': start, 'until': time.time() if until is None else until}
     return result
 
 
-def evidence_report(plate: str) -> dict:
-    report = {
-        "report_id": f"EVD-{uuid.uuid4().hex[:12].upper()}",
-        "generated_at": time.time(),
-        "retention": "prototype; expiry is not enforced",
-        "trajectory": get_trajectory(plate),
-    }
-    payload = json.dumps(report, sort_keys=True, separators=(",", ":"))
-    report["package_hash"] = hashlib.sha256(payload.encode()).hexdigest()
+def evidence_report(plate, since=None, until=None):
+    trajectory = get_trajectory(plate, since, until)
+    if not trajectory['observations']: raise ValueError('No supported plate observations for this interval')
+    now = time.time()
+    passages = [h['passage_id'] for h in trajectory['observations']]
+    raw_reads, raw_total = store.reads_for_passages(passages, trajectory['interval']['since'], trajectory['interval']['until'])
+    if raw_total > 5000: raise ValueError('Report exceeds 5000 raw reads; choose a shorter interval')
+    artifacts = {}
+    for hop in raw_reads:
+        for artifact in hop.get('artifacts', []): artifacts[artifact['sha256']] = artifact
+    report = {'report_id': f'EVD-{uuid.uuid4().hex[:12].upper()}', 'version': 1,
+              'generated_at': now, 'expires_at': now + REPORT_RETENTION_SECONDS,
+              'retention': 'Report expires after 24 hours; source artifacts retained for 7 days',
+              'trajectory': trajectory, 'raw_reads': raw_reads, 'raw_read_count':raw_total, 'artifacts': list(artifacts.values()),
+              'limitations': ['Candidate links do not verify vehicle identity.', 'Frame/crop JPEGs are decoded image derivatives; source clip digests identify their recording.', 'SHA-256 covers this JSON manifest and referenced artifact digests; it is not a digital signature.']}
+    report['package_hash'] = hashlib.sha256(canonical_json(report).encode()).hexdigest()
+    store.put_report(report)
     return report
 
 
-def derive_alerts():
-    """Real, computed-not-fabricated alerts from the live event log."""
-    with _lock:
-        snapshot = list(_log)
-    alerts = []
+def _alert(rule, subject, event, severity, summary, detail, support=None):
+    identity = [rule, subject, event.get('session_id', 'manual'), event['camera_id']]
+    alert = {'alert_id': hashlib.sha256(canonical_json(identity).encode()).hexdigest()[:24], 'rule_version': 1,
+             'type': rule, 'severity': severity, 'summary': summary, 'detail': detail, 'ts': event['ts'],
+             'supporting_event_ids': support or [event.get('event_id')], 'source_mode': event.get('source_mode', 'manual')}
+    store.put_alert(alert)
 
+
+def derive_alerts(since=None, until=None):
+    start = time.time()-WINDOW_SECONDS if since is None else since
+    snapshot = get_events(since=start, until=until)
+    rules = store.setting('rules', DEFAULT_RULES)
+    supported = {p['passage_id'] for p in store.passages(start,until) if p['kind']=='plate' and not p.get('identity_conflict')}
     for event in snapshot:
-        watch = WATCHLIST.get(event.get("plate_norm", ""))
-        if event["kind"] == "plate" and watch:
-            alerts.append({
-                "severity": watch["severity"],
-                "type": "blacklist match",
-                "summary": f"{event.get('plate', event.get('plate_norm'))} matched the mock watchlist",
-                "detail": f"{watch['reason']} · {event['camera_id']} · confidence {event.get('confidence', 0):.0%}",
-                "ts": event["ts"],
-            })
-        if event["kind"] == "plate" and event["camera_id"] in RESTRICTED_CAMERAS:
-            alerts.append({
-                "severity": "warning",
-                "type": "restricted zone",
-                "summary": f"{event.get('plate', event.get('plate_norm'))} entered a restricted camera zone",
-                "detail": f"{RESTRICTED_CAMERAS[event['camera_id']]} · permit data is not connected in this prototype",
-                "ts": event["ts"],
-            })
-
-    # cross-camera vehicle appearance: same class seen on >=2 distinct cameras
-    # within a short rolling window -> appearance-based ReID fallback match
-    vehicle_events = [e for e in snapshot if e["kind"] == "vehicle"]
-    by_label: dict[str, list[dict]] = {}
-    for e in vehicle_events:
-        by_label.setdefault(e["label"], []).append(e)
-
-    for label, evs in by_label.items():
-        evs.sort(key=lambda e: e["ts"])
-        cams_seen: dict[str, float] = {}
-        for e in evs:
-            cams_seen[e["camera_id"]] = e["ts"]
-        if len(cams_seen) >= 2:
-            cams = sorted(cams_seen.items(), key=lambda kv: kv[1])
-            alerts.append({
-                "severity": "info",
-                "type": "cross-camera match",
-                "summary": f"{label} appearance matched across {len(cams)} cameras (ReID fallback, no legible plate)",
-                "detail": ", ".join(f"{c} @ {time.strftime('%H:%M:%S', time.localtime(t))}" for c, t in cams),
-                "ts": cams[-1][1],
-            })
-
-    plate_values = {e.get("plate_norm") for e in snapshot if e["kind"] == "plate" and e.get("plate_norm")}
-    for plate in plate_values:
-        trajectory = get_trajectory(plate)
-        for rejected in trajectory["rejected_links"]:
-            alerts.append({
-                "severity": "critical",
-                "type": "impossible travel",
-                "summary": f"{plate} has an implausible camera transition",
-                "detail": rejected["reason"],
-                "ts": rejected["to_ts"],
-            })
-
-    # loitering: same camera, same label, >=3 detections within 30s window
-    for cam_id in {e["camera_id"] for e in vehicle_events}:
-        cam_evs = sorted([e for e in vehicle_events if e["camera_id"] == cam_id], key=lambda e: e["ts"])
-        window = []
-        for e in cam_evs:
-            window = [w for w in window if e["ts"] - w["ts"] <= 30] + [e]
-            if len(window) >= 6:
-                alerts.append({
-                    "severity": "warning",
-                    "type": "loitering",
-                    "summary": f"{len(window)} sightings at {cam_id} within 30s",
-                    "detail": f"class={window[0]['label']}",
-                    "ts": e["ts"],
-                })
-                window = []
-
-    alerts.sort(key=lambda a: a["ts"], reverse=True)
-    unique = []
-    seen = set()
-    for alert in alerts:
-        key = (alert["type"], alert["summary"])
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(alert)
-    return unique[:20]
+        if event.get('passage_id') not in supported: continue
+        if event['kind'] != 'plate' or event.get('identity_status', 'supported') != 'supported': continue
+        plate = event.get('plate_norm')
+        if plate in rules['watchlist']:
+            _alert('watchlist match', plate, event, 'critical', f'{plate} matched a local watchlist entry', rules['watchlist'][plate])
+        if event['camera_id'] in rules['restricted_cameras']:
+            _alert('zone sighting', plate, event, 'warning', f'{plate} observed at {event["camera_id"]}', 'Configured zone sighting; no permit determination or violation claim')
+    for plate in {e.get('plate_norm') for e in snapshot if e['kind']=='plate' and e.get('plate_norm')}:
+        route = get_trajectory(plate, start, until)
+        for link in route['rejected_links']:
+            event = {'camera_id': link['to_camera_id'], 'ts': link['to_ts']}
+            _alert('route review', [plate, link['from_ts'], link['to_ts']], event, 'warning', f'{plate}: camera transition requires review', link['reason'])
+    # Dwell means one tracked subject remains in an explicitly configured zone for elapsed time.
+    for rule in rules.get('dwell_zones', []):
+        by_track = {}
+        for e in snapshot:
+            if e['kind']!='vehicle' or e['camera_id']!=rule['camera_id'] or e.get('track_id') is None: continue
+            by_track.setdefault((e.get('session_id'), e['track_id']), []).append(e)
+        for identity, reads in by_track.items():
+            sequence=[]
+            for e in reads:
+                width, height = e.get('frame_size', [0,0])
+                if not width or not height: continue
+                x1,y1,x2,y2=e['bbox']; x=(x1+x2)/2/width; y=(y1+y2)/2/height
+                left,top,right,bottom=rule['zone']
+                if not(left<=x<=right and top<=y<=bottom): sequence=[]; continue
+                if sequence and e['ts']-sequence[-1]['ts']>rule['max_gap_seconds']: sequence=[]
+                sequence.append(e)
+                if len(sequence)>=3 and e['ts']-sequence[0]['ts']>=rule['dwell_seconds']:
+                    _alert('zone dwell', list(identity)+[sequence[0]['ts']], e, 'warning', f'Track {e["track_id"]} remained in the configured zone',
+                           f'{e["ts"]-sequence[0]["ts"]:.1f}s observed dwell at {e["camera_id"]}; identity is camera-local', [r.get('event_id') for r in sequence])
+                    break
+    return [a for a in store.alerts(start) if until is None or a['ts']<=until]
 
 
-def stats():
-    with _lock:
-        snapshot = list(_log)
+def stats(since=None, until=None):
     now = time.time()
-    last_min = [e for e in snapshot if now - e["ts"] <= 60]
-    per_cam: dict[str, int] = {}
-    for e in snapshot:
-        per_cam[e["camera_id"]] = per_cam.get(e["camera_id"], 0) + 1
-    busiest = max(per_cam.items(), key=lambda kv: kv[1])[0] if per_cam else None
-    confs = [e["confidence"] for e in snapshot if e.get("confidence")]
-    avg_conf = sum(confs) / len(confs) if confs else 0.0
-    return {
-        "total_events": len(snapshot),
-        "events_last_minute": len(last_min),
-        "per_camera": per_cam,
-        "busiest_camera": busiest,
-        "avg_confidence": round(avg_conf, 3),
-    }
+    start = now-WINDOW_SECONDS if since is None else since
+    end = now if until is None else until
+    # Aggregate across all rows, not the paginated raw-read API limit.
+    return {**store.statistics(start,end,now), 'interval':{'since':start,'until':end},
+            'metric':'camera-local tracked passages, not globally unique vehicles', 'coverage':'sampled recorded inputs'}
+
+
+def flows(since=None, until=None):
+    start = time.time()-WINDOW_SECONDS if since is None else since
+    passages=store.passages(start,until)
+    plates={p.get('plate_norm') for p in passages if p['kind']=='plate' and p.get('identity_status','supported')=='supported' and not p.get('identity_conflict')}
+    counts=Counter()
+    for plate in plates:
+        for link in get_trajectory(plate,start,until)['accepted_links']:
+            counts[(link['from_camera_id'],link['to_camera_id'])]+=1
+    return [{'from':a,'to':b,'count':n} for (a,b),n in counts.items()]

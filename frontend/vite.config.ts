@@ -14,6 +14,7 @@ export default defineConfig({
     },
   },
   server: {
+    host: "127.0.0.1",
     port: Number(process.env.AI26_FRONTEND_PORT ?? "5174"),
     strictPort: true,
     proxy: {

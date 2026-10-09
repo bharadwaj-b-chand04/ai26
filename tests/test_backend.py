@@ -15,14 +15,18 @@ sys.path.insert(0, str(BACKEND))
 import cameras
 import events
 import nlquery
+from repository import Repository
 from plate_format import normalize_plate
 from tracking import CentroidTracker
 
 
 class ImportChecks(unittest.TestCase):
     def setUp(self):
-        with events._lock:
-            events._log.clear()
+        self.repository = Repository(':memory:')
+        self.storage = patch.object(events, 'store', self.repository)
+        self.storage.start()
+        self.addCleanup(self.storage.stop)
+        self.addCleanup(self.repository.close)
 
     def observation(self, camera, ts):
         return {"camera_id": camera, "kind": "plate", "plate": "KL07AB1234",
@@ -79,10 +83,10 @@ class ImportChecks(unittest.TestCase):
     def test_trajectory_rejects_impossible_travel(self):
         now = time.time()
         good = events.build_trajectory([self.observation("CAM-07", now - 120), self.observation("CAM-08", now)])
-        self.assertEqual(good["status"], "confirmed")
+        self.assertEqual(good["status"], "candidate")
         self.assertEqual(len(good["accepted_links"]), 1)
         bad = events.build_trajectory([self.observation("CAM-07", now - 1), self.observation("CAM-09", now)])
-        self.assertEqual(bad["status"], "cloning_candidate")
+        self.assertEqual(bad["status"], "review_required")
         self.assertIn("impossible travel", bad["rejected_links"][0]["reason"])
 
     def test_alerts_queries_evidence_share_observations(self):
@@ -92,7 +96,7 @@ class ImportChecks(unittest.TestCase):
         self.assertEqual(len(events.get_events(camera_id="CAM-07")), 1)
         self.assertEqual(events.stats()["total_events"], 2)
         types = {alert["type"] for alert in events.derive_alerts()}
-        self.assertTrue({"blacklist match", "restricted zone", "impossible travel"}.issubset(types))
+        self.assertTrue({"watchlist match", "zone sighting", "route review"}.issubset(types))
         self.assertIn("KL07AB1234", nlquery.answer("plates at CAM-07")["text"])
         report = events.evidence_report("KL07AB1234")
         digest = report.pop("package_hash")

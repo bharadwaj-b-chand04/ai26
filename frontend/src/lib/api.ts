@@ -5,9 +5,24 @@ export interface Camera {
   location_confirmed: boolean
   lat: number
   lon: number
+  source_available: boolean
+  health: CameraHealth
+}
+export interface CameraHealth {
+  camera_id: string
+  status: string
+  last_frame_at: number | null
+  frame_age_seconds: number | null
+  processed_fps: number
+  error: string | null
 }
 
 export interface DetectionEvent {
+  event_id: string
+  passage_id: string
+  track_id?: number
+  identity_status?: string
+  source_mode?: string
   camera_id: string
   kind: "vehicle" | "plate"
   label?: string
@@ -22,6 +37,9 @@ export interface DetectionEvent {
 }
 
 export interface Alert {
+  alert_id?: string
+  state?: string
+  review?: { reviewer: string; state: string; note: string; ts: number }[]
   severity: "info" | "warning" | "critical"
   type: string
   summary: string
@@ -30,6 +48,8 @@ export interface Alert {
 }
 
 export interface Stats {
+  vehicle_passages: number
+  per_camera_passages: Record<string, number>
   total_events: number
   events_last_minute: number
   per_camera: Record<string, number>
@@ -38,6 +58,8 @@ export interface Stats {
 }
 
 export interface TrajectoryHop {
+  time_basis?: string
+  source_mode?: string
   camera_id: string
   location: string
   location_confirmed: boolean
@@ -58,30 +80,36 @@ export interface TrajectoryLink {
   to_ts: number
   distance_km: number
   elapsed_seconds: number
-  implied_speed_kmh: number
+  implied_speed_kmh: number | null
   reason?: string
 }
 
 export interface Trajectory {
   mode: "live"
-  status: "not_found" | "observed" | "confirmed" | "cloning_candidate"
+  status: "not_found" | "observed" | "candidate" | "review_required"
   plate: string
   observations: TrajectoryHop[]
   accepted_links: TrajectoryLink[]
   rejected_links: TrajectoryLink[]
+  candidate_links: TrajectoryLink[]
 }
 
 export interface EvidenceReport {
   report_id: string
   generated_at: number
   retention: string
+  expires_at: number
+  artifacts: {sha256: string; role: string; url: string}[]
   package_hash: string
   trajectory: Trajectory
 }
 
 async function requestJson<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
   const response = await fetch(input, init)
-  if (!response.ok) throw new Error(`Request failed (${response.status})`)
+  if (!response.ok) {
+    const body = await response.json().catch(() => null)
+    throw new Error(body?.error?.message ?? `Request failed (${response.status})`)
+  }
   return response.json() as Promise<T>
 }
 
@@ -110,12 +138,12 @@ export async function askNL(question: string): Promise<{ text: string; sql?: str
   })
 }
 
-export async function getTrajectory(plate: string): Promise<Trajectory> {
-  return requestJson<Trajectory>(`/api/trajectory/${encodeURIComponent(plate)}`)
+export async function getTrajectory(plate: string, interval: Record<string, string> = {}): Promise<Trajectory> {
+  return requestJson<Trajectory>(`/api/trajectory/${encodeURIComponent(plate)}?${new URLSearchParams(interval)}`)
 }
 
-export async function createEvidenceReport(plate: string): Promise<EvidenceReport> {
-  return requestJson<EvidenceReport>(`/api/evidence/${encodeURIComponent(plate)}`, { method: "POST" })
+export async function createEvidenceReport(plate: string, interval: Record<string, string> = {}): Promise<EvidenceReport> {
+  return requestJson<EvidenceReport>(`/api/evidence/${encodeURIComponent(plate)}?${new URLSearchParams(interval)}`, { method: "POST" })
 }
 
 export function streamUrl(cameraId: string, startAt?: number, retry = 0, anchorAt?: number) {
@@ -137,4 +165,20 @@ export function cameraPlaybackOffset(cameraId: string, duration: number, now = D
 
 export function snapshotUrl(cameraId: string) {
   return `/api/snapshot/${cameraId}?t=${Date.now()}`
+}
+
+export async function getFlows(): Promise<{ from: string; to: string; count: number }[]> {
+  return requestJson("/api/flows")
+}
+export async function reviewAlert(id: string, state: string, reviewer: string, note: string) {
+  return requestJson(`/api/alerts/${encodeURIComponent(id)}/review`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({state, reviewer, note}) })
+}
+export interface RuleConfig {
+  watchlist: Record<string, string>
+  restricted_cameras: string[]
+  dwell_zones: { camera_id: string; zone: [number,number,number,number]; dwell_seconds: number; max_gap_seconds: number }[]
+}
+export async function getRules(): Promise<RuleConfig> { return requestJson("/api/rules") }
+export async function saveRules(config: RuleConfig): Promise<RuleConfig> {
+  return requestJson("/api/rules", {method: "PUT", headers: {"Content-Type":"application/json"}, body: JSON.stringify(config)})
 }
