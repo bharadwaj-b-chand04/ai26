@@ -100,6 +100,12 @@ def get_trajectory(plate, since=None, until=None):
 
 
 def evidence_report(plate, since=None, until=None):
+    # Prevent maintenance from removing a source between selecting it and leasing it.
+    with store.lock:
+        return _evidence_report(plate, since, until)
+
+
+def _evidence_report(plate, since=None, until=None):
     trajectory = get_trajectory(plate, since, until)
     if not trajectory['observations']: raise ValueError('No supported plate observations for this interval')
     now = time.time()
@@ -109,9 +115,13 @@ def evidence_report(plate, since=None, until=None):
     artifacts = {}
     for hop in raw_reads:
         for artifact in hop.get('artifacts', []): artifacts[artifact['sha256']] = artifact
+    from artifacts import artifact_bytes
+    for artifact in artifacts.values():
+        if artifact_bytes(artifact['sha256'], now + REPORT_RETENTION_SECONDS) is None:
+            raise ValueError('A source artifact is missing; choose an available evidence interval')
     report = {'report_id': f'EVD-{uuid.uuid4().hex[:12].upper()}', 'version': 1,
               'generated_at': now, 'expires_at': now + REPORT_RETENTION_SECONDS,
-              'retention': 'Report expires after 24 hours; source artifacts retained for 7 days',
+              'retention': 'Report expires after 24 hours; referenced artifacts protected until report expiry; other source artifacts retained for 7 days',
               'trajectory': trajectory, 'raw_reads': raw_reads, 'raw_read_count':raw_total, 'artifacts': list(artifacts.values()),
               'limitations': ['Candidate links do not verify vehicle identity.', 'Frame/crop JPEGs are decoded image derivatives; source clip digests identify their recording.', 'SHA-256 covers this JSON manifest and referenced artifact digests; it is not a digital signature.']}
     report['package_hash'] = hashlib.sha256(canonical_json(report).encode()).hexdigest()

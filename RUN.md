@@ -116,9 +116,9 @@ The database and artifacts are local, ignored files. Back up the data directory
 with the API stopped (SQLite uses WAL while running). Default views cover the last
 five minutes; explicit date/time queries access retained history. Observations
 and source JPEG derivatives are cleaned after seven days, reports expire after
-24 hours. Near the source-retention boundary a report artifact may expire first;
-the ZIP endpoint reports missing/expired artifacts rather than producing an
-apparently complete package. Reports are local snapshots, not signed evidence.
+24 hours. Active reports lease their referenced images until report expiry.
+Maintenance runs independently of inference. Missing/corrupt artifacts fail
+explicitly; hashes do not recover manually removed files. Reports are local snapshots, not signed evidence.
 
 ## Static walkthrough
 
@@ -128,3 +128,15 @@ python -m http.server 8080 --directory demo
 
 http://localhost:8080 uses synthetic events and simulated queries, without the
 backend/models. Its CDN maps/charts need internet.
+
+## Playback and CPU budget
+
+Camera tiles are cached sampled previews. The focused camera defaults to native
+recorded playback; choose **Sampled detections** for shared inference overlays and
+its measured sampling FPS. Only one video plays, and hidden pages pause media and
+polling. The source video and inference sample positions may differ after seeking.
+
+`AI26_CPU_THREADS=2` is the desktop default (range 1–8). The processor uses one
+FFmpeg decode thread per source and retains the total sampling budget configured
+by `AI26_TOTAL_INFERENCE_FPS`. Changing this budget trades CPU and temporal coverage;
+benchmark on the target machine before claiming throughput or detection accuracy.

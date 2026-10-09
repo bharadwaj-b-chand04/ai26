@@ -6,19 +6,27 @@ SIH source was left intact. The app runs on http://127.0.0.1:5174/.
 
 ## Status
 
-Across all 80 planned tasks: **36 done, 26 partial, 18 pending**. Done means the stated engineering behavior works within the documented local prototype scope. It does not imply real OCR/identity accuracy. Partial tasks retain explicit remaining work below.
+Across all 80 planned tasks: **37 done, 25 partial, 18 pending**. Done means the stated engineering behavior works within the documented local prototype scope. It does not imply real OCR/identity accuracy. Partial tasks retain explicit remaining work below.
 
 ## What now works
 
 Shared background six-camera processing; durable SQLite observations/passages;
 per-track OCR abstention; real empty investigations; editable persistent local
 rules and review; truthful camera health/activity; bounded historical query
-intents; immutable evidence JSON/ZIP/print; source/derivative hashes; report expiry;
+intents; immutable evidence JSON/ZIP/print; source/derivative hashes; report expiry and artifact leases; cached camera previews;
 CPU lockfile; clean launcher shutdown/restart; regression and evaluation tooling.
+
+## Performance update
+
+The camera wall uses six cached 320×180 previews and one focused recorded player;
+shared detections remain a separately labeled sampled view. Polling pauses when
+hidden and requests do not overlap. The log fetches at most 40 rows. CPU/decode
+threads are bounded. See `docs/PERFORMANCE.md` in the repository for the measured
+short before/after samples and limits. Active-report retention is now implemented.
 
 ## Validation
 
-- 49 isolated backend tests pass with the frozen Python 3.12 CPU environment.
+- 55 isolated backend tests pass with the frozen Python 3.12 CPU environment.
 - Frontend lint passes with two existing shared-component Fast Refresh warnings;
   TypeScript/Vite production build passes.
 - Fresh frozen sync installed CPU torch 2.14.0+cpu and torchvision 0.29.0+cpu.
@@ -32,8 +40,8 @@ CPU lockfile; clean launcher shutdown/restart; regression and evaluation tooling
 - Evaluation command processes two deliberately imperfect synthetic records; these
   are metric regressions, not evidence of model accuracy.
 
-Machine-readable runtime evidence is in `docs/validation/runtime-smoke.json`
-and the delivery's `AI26_RUNTIME_CHECKS.json`. CI remote status belongs to the PR checks, not these
+Machine-readable runtime evidence is in the adjacent delivery's
+`AI26_RUNTIME_CHECKS.json`. CI remote status belongs to the PR checks, not these
 local results. Short runtime samples do not establish sustained throughput.
 
 ## Remaining release gates and execution order
@@ -47,8 +55,8 @@ local results. Short runtime samples do not establish sustained throughput.
    evaluate exact/fuzzy identity links (P1-14–16, EV-06).
 4. Calibrate traffic counts/density/speed and historical segment baselines;
    evaluate rules on positive and negative real cases (P2-01–04, EV-07–09).
-5. Complete storage migration evolution, ALPR weight provenance, report artifact
-   leases and authenticated escalation where needed.
+5. Complete camera/link catalog persistence, ALPR weight provenance and
+   authenticated escalation where needed.
 6. Optional research/production phases remain separate. No restored/reconstructed
    pixels, registry verification, signed evidence, RTSP capture or production auth
    is represented as implemented.
@@ -82,7 +90,7 @@ local results. Short runtime samples do not establish sustained throughput.
 | P1-02 | Done | Define inference ownership so multiple viewers do not create duplicate processing/event streams. | Streams/snapshots only consume cache; two-consumer regression and exclusive Linux data-directory ownership lock. |
 | P1-03 | Done | Add a typed observation schema with stable event IDs and per-track passage IDs. | Typed finite observations, deterministic idempotent read IDs, per-session local passage IDs. |
 | P1-04 | Partial | Preserve source clip/frame timestamp separately from processing time; define cross-camera clock handling. | Replay source position and processing time are separate; original capture times and synchronized clocks are missing. |
-| P1-05 | Partial | Add persistent observations, camera catalog, tracks, links and alert storage with migrations. | Version-1 SQLite observations/sessions/passages/alerts/reports/settings/audit; catalog is static and links derived. Migration evolution remains. |
+| P1-05 | Partial | Add persistent observations, camera catalog, tracks, links and alert storage with migrations. | Version-2 SQLite with tested version-1 migration and report artifact leases; catalog is still static and links derived. |
 | P1-06 | Done | Expose a validated ingestion path rather than relying only on streaming request side effects. | Processor writes through typed validated ingestion rather than request-side streaming effects. No external ingestion API is claimed. |
 | P1-07 | Partial | Store source-frame and plate-crop references with hashes and model/version metadata. | Selected frame/crop digests, source SHA and pipeline/model versions retained; exact ALPR weight digests and per-read frame coverage remain. |
 | P1-08 | Done | Test reconnect, corrupt video, end-of-file, missing clips and inference exceptions with bounded retry/backoff. | Controlled reconnect, loop boundary, missing/corrupt input, decode failure and model-download exception tests; 10-second retry and stale-frame suppression. |
@@ -114,7 +122,7 @@ local results. Short runtime samples do not establish sustained throughput.
 | P2-07 | Partial | Connect a real human-review/escalation workflow; add notifications only if required by the project. | Local acknowledgement/review/dismissal works; authenticated reviewer identity, escalation and notifications are pending. |
 | P2-08 | Done | Package evidence observations, raw/canonical OCR, frames/crops, accepted/rejected paths and metadata consistently. | Manifest/raw reads/canonical strings/artifacts/link decisions/provenance packaged consistently with verified digests; derivative and coverage limits stated. |
 | P2-09 | Done | Provide direct JSON/package download and a dedicated PDF/print layout with matching report data. | Browser JSON/ZIP downloads verified; dedicated print contains the same stored snapshot and raw reads. PDF uses the browser print dialog. |
-| P2-10 | Partial | Enforce defined retention/expiry rather than displaying a retention string. | 24-hour report and seven-day source expiry/cleanup enforced; report-dependent artifact leases and standalone maintenance are pending. |
+| P2-10 | Done | Enforce defined retention/expiry rather than displaying a retention string. | 24-hour report expiry, seven-day source cleanup, version-2 artifact leases, and independent maintenance; boundary and processing-disabled tests pass. |
 | P2-11 | Partial | Add report access/audit records and signing if independently verifiable evidence is required. | Local report access and review audit records exist; digital signing and independently verifiable audit chain do not. |
 | P2-12 | Done | Keep demonstrations separate from live queries, including colors, confidence values and statuses. | Synthetic walkthrough/alerts are explicit selection; real queries never substitute them or export them as observed evidence. |
 | P2-13 | Done | Test query, camera recovery, empty investigation and evidence export flows end to end. | Browser empty investigation, focused missing-to-working camera recovery, keyboard/mobile and isolated synthetic report downloads/print verified; API query regressions pass. |
@@ -174,7 +182,7 @@ be reported. CPU sampling is sparse, not full-frame-rate processing. Counts are
 local tracked passages; plate and vehicle association remains unvalidated.
 
 Artifacts are selected JPEG derivatives, not a full original-frame archive. Their
-seven-day lifetime is independent of 24-hour report snapshots, so old source
-artifacts may expire before a report; ZIP fails explicitly rather than hiding
-missing evidence. SQLite reviewer/audit data is local and unauthenticated. Hashes
+seven-day source lifetime is extended by active report leases until report expiry.
+Missing/corrupt source images reject report creation; later manual file removal or
+corruption makes downloads fail explicitly rather than hiding missing evidence. SQLite reviewer/audit data is local and unauthenticated. Hashes
 detect changed bytes and do not prove correctness or authenticated custody.

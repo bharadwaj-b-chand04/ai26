@@ -20,7 +20,8 @@ class Repository:
         self.db.row_factory = sqlite3.Row
         self.db.execute('PRAGMA journal_mode=WAL')
         version = self.db.execute('PRAGMA user_version').fetchone()[0]
-        if version > 1:
+        if version > 2:
+            self.db.close()
             raise RuntimeError('Database version is newer than this application')
         with self.db:
             self.db.executescript('''
@@ -34,8 +35,18 @@ class Repository:
                 CREATE TABLE IF NOT EXISTS reports(id TEXT PRIMARY KEY, expires REAL, data TEXT);
                 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, data TEXT);
                 CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY, ts REAL, action TEXT, subject TEXT, data TEXT);
-                PRAGMA user_version=1;
             ''')
+            if version < 2:
+                self.db.executescript('''
+                    CREATE TABLE IF NOT EXISTS artifact_leases(report TEXT, digest TEXT, expires REAL, PRIMARY KEY(report,digest));
+                    CREATE INDEX IF NOT EXISTS artifact_lease_expiry ON artifact_leases(expires);
+                    CREATE INDEX IF NOT EXISTS artifact_lease_digest ON artifact_leases(digest,expires);
+                    INSERT OR IGNORE INTO artifact_leases
+                        SELECT reports.id,json_extract(a.value,'$.sha256'),reports.expires
+                        FROM reports,json_each(reports.data,'$.artifacts') a;
+                    PRAGMA user_version=2;
+                ''')
+        self.schema_version = 2
 
     def start_session(self, session):
         with self.lock, self.db:
@@ -197,6 +208,17 @@ class Repository:
     def put_report(self, report):
         with self.lock, self.db:
             self.db.execute('INSERT INTO reports VALUES(?,?,?)', (report['report_id'], report['expires_at'], canonical_json(report)))
+            self.db.executemany('INSERT INTO artifact_leases VALUES(?,?,?)',
+                                [(report['report_id'], a['sha256'], report['expires_at']) for a in report.get('artifacts', [])])
+
+    def protected_artifacts(self, now):
+        with self.lock:
+            return {r[0] for r in self.db.execute('SELECT DISTINCT digest FROM artifact_leases WHERE expires>?', (now,))}
+
+    def artifact_expiry(self, digest, now):
+        with self.lock:
+            return self.db.execute('SELECT max(expires) FROM artifact_leases WHERE digest=? AND expires>?', (digest,now)).fetchone()[0]
+
 
     def report(self, report_id, now):
         with self.lock:
@@ -210,6 +232,7 @@ class Repository:
         with self.lock, self.db:
             self.db.execute('DELETE FROM observations WHERE ts<?', (cutoff,))
             self.db.execute('DELETE FROM passages WHERE last<?', (cutoff,))
+            self.db.execute('DELETE FROM artifact_leases WHERE expires<=?', (now,))
             self.db.execute('DELETE FROM reports WHERE expires<=?', (now,))
             self.db.execute('DELETE FROM alerts WHERE ts<?', (cutoff,))
             self.db.execute("DELETE FROM sessions WHERE started<? AND NOT EXISTS (SELECT 1 FROM observations WHERE json_extract(observations.data,'$.session_id')=sessions.id)", (cutoff,))

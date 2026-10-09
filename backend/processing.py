@@ -10,8 +10,8 @@ from pathlib import Path
 
 import cv2
 from cameras import CAMERAS, camera_source
-from events import add_events, derive_alerts, store, RETENTION_SECONDS
-from artifacts import save_image, cleanup_artifacts
+from events import add_events, derive_alerts, store
+from artifacts import save_image
 
 log = logging.getLogger(__name__)
 
@@ -43,10 +43,10 @@ class Processor:
                       'last_event_at':None, 'error':None, 'source_available':False, 'queue_depth':0,
                       'source_mode':'recorded', 'time_basis':'replay_clock'} for c in self.cameras}
         self.latest = {}
+        self.thumbnails = {}
         self.epochs = {}
         self.best = {}
         self.retry_at = {}
-        self.last_cleanup = 0
         self.source_hashes = {}
         self.capture_generation = {}
         self.owner_file = None
@@ -93,6 +93,10 @@ class Processor:
             if value and time.time()-value[0] > max(15, len(self.cameras)/self.rate*3): return None
             return value
 
+    def preview(self, camera):
+        with self.lock:
+            return self.thumbnails.get(camera) if self.jpeg(camera) else None
+
     def _set(self, camera, **values):
         with self.lock: self.state[camera].update(values)
 
@@ -110,7 +114,7 @@ class Processor:
         try:
             reopened = False
             if camera_id not in self.captures:
-                cap=cv2.VideoCapture(str(path))
+                cap=cv2.VideoCapture(str(path),cv2.CAP_FFMPEG,[cv2.CAP_PROP_N_THREADS,1])
                 if not cap.isOpened(): cap.release(); raise RuntimeError('Source could not be opened')
                 self.captures[camera_id]=cap
                 with path.open('rb') as source_file:
@@ -164,8 +168,12 @@ class Processor:
             if inserted: derive_alerts()
             ok,buf=cv2.imencode('.jpg',frame,[cv2.IMWRITE_JPEG_QUALITY,80])
             if not ok: raise RuntimeError('Annotated image could not be encoded')
+            preview=cv2.resize(frame,(320,max(1,round(height*320/width))),interpolation=cv2.INTER_AREA)
+            preview_ok,preview_buf=cv2.imencode('.jpg',preview,[cv2.IMWRITE_JPEG_QUALITY,65])
+            if not preview_ok: raise RuntimeError('Preview could not be encoded')
             with self.lock:
                 self.latest[camera_id]=(processing_time,buf.tobytes())
+                self.thumbnails[camera_id]=(processing_time,preview_buf.tobytes())
                 s=self.state[camera_id]
                 s.update(status='processing',error=None,last_frame_at=processing_time,
                          last_event_at=processing_time if detections else s['last_event_at'],
@@ -192,11 +200,6 @@ class Processor:
                     began=time.monotonic()
                     self.step(camera)
                     self.stop_event.wait(max(0,1/self.rate-(time.monotonic()-began)))
-                now=time.time()
-                if now-self.last_cleanup>60:
-                    store.cleanup(now-RETENTION_SECONDS,now)
-                    cleanup_artifacts(now-RETENTION_SECONDS)
-                    self.last_cleanup=now
         finally:
             for cap in self.captures.values(): cap.release()
             self.captures.clear()

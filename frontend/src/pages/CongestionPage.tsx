@@ -1,23 +1,17 @@
-import { useEffect, useState } from "react"
-import { getCameras, getStats, type Camera, type Stats } from "@/lib/api"
+import { usePolling } from "@/hooks/usePolling"
+import { useState } from "react"
+import { getStats, type Camera, type Stats } from "@/lib/api"
 import { OsmMap } from "@/components/OsmMap"
 
-export function CongestionPage() {
-  const [cameras,setCameras]=useState<Camera[]>([])
+export function CongestionPage({ cameras }: { cameras: Camera[] }) {
   const [stats,setStats]=useState<Stats|null>(null)
   const [error,setError]=useState<string|null>(null)
-  useEffect(()=>{
-    let alive=true,busy=false
-    const tick=async()=>{
-      if(busy)return
-      busy=true
-      try{const [c,s]=await Promise.all([getCameras(),getStats()]);if(alive){setCameras(c);setStats(s);setError(null)}}
-      catch(e){if(alive)setError(e instanceof Error?e.message:"Traffic activity unavailable")}
-      finally{busy=false}
-    }
-    tick();const timer=setInterval(tick,3000)
-    return()=>{alive=false;clearInterval(timer)}
-  },[])
+  usePolling(async signal => {
+    try {
+      const s = await getStats(signal)
+      if (!signal.aborted) { setStats(s); setError(null) }
+    } catch (e) { if (!signal.aborted) setError(e instanceof Error ? e.message : "Activity unavailable") }
+  }, 3000)
   const total=stats?.vehicle_passages || 1
   const ranked=cameras.map(c=>({camera:c,count:stats?.per_camera_passages[c.id] ?? 0})).sort((a,b)=>b.count-a.count)
   return <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">

@@ -1,4 +1,6 @@
 """Regression/contract tests use isolated storage and deterministic fixtures, never live data."""
+import asyncio
+import sqlite3
 import hashlib
 import io
 import json
@@ -24,6 +26,7 @@ import stream
 import nlquery
 from repository import Repository, canonical_json
 from fusion import PlateConsensus
+from maintenance import Maintenance
 
 class Reliability(unittest.TestCase):
     def setUp(self):
@@ -154,7 +157,7 @@ class Reliability(unittest.TestCase):
         self.assertEqual(events.stats(since=self.now-8,until=self.now-2)['vehicle_passages'],0)
 
     def test_oversized_artifact_package_is_rejected(self):
-        fake={'sha256':'a'*64,'role':'plate-crop','size':65*1024*1024}
+        fake={**artifacts.save_image(np.zeros((30,30,3),dtype=np.uint8),'plate-crop'),'size':65*1024*1024}
         events.add_events([self.plate(artifacts=[fake])]);report=events.evidence_report('KL07AB1234')
         self.assertEqual(self.client.get('/api/reports/'+report['report_id']+'/package').status_code,413)
 
@@ -176,6 +179,57 @@ class Reliability(unittest.TestCase):
         events.add_events([self.plate()]);report=events.evidence_report('KL07AB1234')
         with patch.object(main.time,'time',return_value=report['expires_at']+1):
             self.assertEqual(self.client.get('/api/reports/'+report['report_id']).status_code,404)
+
+    def test_report_lease_survives_source_age_and_expires(self):
+        ref=artifacts.save_image(np.zeros((30,30,3),dtype=np.uint8),'plate-crop')
+        path=artifacts.ROOT/(ref['sha256']+'.jpg')
+        os.utime(path,(self.now-8*86400,self.now-8*86400))
+        events.add_events([self.plate(artifacts=[ref])])
+        report=events.evidence_report('KL07AB1234')
+        Maintenance(self.repo).run_once()
+        self.assertTrue(path.is_file())
+        self.assertEqual(self.client.get(ref['url']).status_code,200)
+        self.assertEqual(self.client.get('/api/reports/'+report['report_id']+'/package').status_code,200)
+        Maintenance(self.repo).run_once(report['expires_at']+1)
+        self.assertFalse(path.exists())
+        self.assertEqual(self.repo.protected_artifacts(report['expires_at']+1),set())
+        self.assertIsNone(self.repo.report(report['report_id'],report['expires_at']+1))
+
+    def test_schema_one_migration_backfills_report_leases(self):
+        path=Path(self.folder.name)/'legacy.sqlite3'
+        db=sqlite3.connect(path)
+        db.execute('CREATE TABLE reports(id TEXT PRIMARY KEY,expires REAL,data TEXT)')
+        report={'report_id':'legacy','expires_at':self.now+100,'artifacts':[{'sha256':'a'*64}]}
+        db.execute('INSERT INTO reports VALUES(?,?,?)',('legacy',report['expires_at'],canonical_json(report)))
+        db.execute('PRAGMA user_version=1');db.commit();db.close()
+        migrated=Repository(path)
+        try:
+            self.assertEqual(migrated.schema_version,2)
+            self.assertEqual(migrated.protected_artifacts(self.now),{'a'*64})
+            self.assertEqual(migrated.db.execute('PRAGMA user_version').fetchone()[0],2)
+        finally: migrated.close()
+
+    def test_retention_lifespan_runs_without_inference(self):
+        with patch.object(main,'Maintenance') as janitor, patch.object(main.processor,'start') as start, patch.object(main.processor,'stop'):
+            with TestClient(main.app): pass
+            start.assert_not_called()
+            janitor.return_value.start.assert_called_once()
+            janitor.return_value.stop.assert_called_once()
+
+    def test_preview_cache_validation_and_stale_abstention(self):
+        p=processing.Processor(cameras=[{'id':'CAM-01','kind':'vehicle'}])
+        p.state['CAM-01']['status']='processing'
+        p.latest['CAM-01']=(self.now,b'full frame')
+        p.thumbnails['CAM-01']=(self.now,b'preview')
+        with patch.object(main,'processor',p):
+            response=self.client.get('/api/preview/CAM-01')
+            self.assertEqual(response.status_code,200)
+            self.assertEqual(response.content,b'preview')
+            self.assertEqual(self.client.get('/api/preview/CAM-01',headers={'If-None-Match':response.headers['etag']}).status_code,304)
+            p.state['CAM-01']['status']='error'
+            self.assertEqual(self.client.get('/api/preview/CAM-01').status_code,503)
+            self.assertEqual(self.client.get('/api/preview/CAM-09').status_code,404)
+        self.assertEqual(self.repo.observations(),[])
 
     def test_artifact_corruption_detected(self):
         ref=artifacts.save_image(np.zeros((30,30,3),dtype=np.uint8),'plate-crop')
@@ -239,10 +293,32 @@ class Reliability(unittest.TestCase):
         p=processing.Processor(cameras=[{'id':'CAM-01','kind':'vehicle'}])
         p.state['CAM-01']['status']='processing';p.latest['CAM-01']=(self.now,b'jpeg')
         with patch.object(stream,'processor',p):
-            a=stream.mjpeg_generator('CAM-01');b=stream.mjpeg_generator('CAM-01')
-            self.assertIn(b'jpeg',next(a));self.assertIn(b'jpeg',next(b));a.close();b.close()
+            async def consume():
+                a=stream.mjpeg_generator('CAM-01');b=stream.mjpeg_generator('CAM-01')
+                self.assertIn(b'jpeg',await anext(a));self.assertIn(b'jpeg',await anext(b))
+                await a.aclose();await b.aclose()
+            asyncio.run(consume())
             self.assertEqual(stream.snapshot_frame('CAM-01'),b'jpeg')
         self.assertEqual(self.repo.observations(),[])
+
+    def test_idle_stream_cancels_without_blocking_event_loop(self):
+        p=processing.Processor(cameras=[])
+        with patch.object(stream,'processor',p):
+            async def cancel_idle():
+                feed=stream.mjpeg_generator('CAM-01')
+                pending=asyncio.create_task(anext(feed))
+                await asyncio.sleep(.01)
+                pending.cancel()
+                with self.assertRaises(asyncio.CancelledError): await pending
+                await feed.aclose()
+            asyncio.run(asyncio.wait_for(cancel_idle(),.5))
+
+    def test_report_creation_rejects_missing_source_artifact(self):
+        events.add_events([self.plate(artifacts=[{'sha256':'a'*64,'role':'plate-crop','size':30}])])
+        response=self.client.post('/api/evidence/KL07AB1234')
+        self.assertEqual(response.status_code,409)
+        self.assertIn('missing',response.json()['error']['message'])
+        self.assertEqual(self.repo.db.execute('SELECT count(*) FROM reports').fetchone()[0],0)
 
     def test_missing_processor_source_bounded(self):
         p=processing.Processor(cameras=[{'id':'CAM-01','kind':'vehicle'}],source=lambda _:Path(self.folder.name)/'missing.mp4')
@@ -261,6 +337,8 @@ class Reliability(unittest.TestCase):
         self.assertEqual(read['time_basis'],'replay_clock');self.assertIn('source_sha256',read)
         self.assertEqual(len(read['artifacts']),2)
         self.assertTrue(p.jpeg('CAM-01')[1].startswith(b'\xff\xd8'))
+        preview=processing.cv2.imdecode(np.frombuffer(p.preview('CAM-01')[1],np.uint8),processing.cv2.IMREAD_COLOR)
+        self.assertEqual(preview.shape[1],320)
 
     def test_aggregates_do_not_truncate_at_raw_api_limit(self):
         events.add_events([self.vehicle(self.now-i*.1,frame_id=i) for i in range(6)])

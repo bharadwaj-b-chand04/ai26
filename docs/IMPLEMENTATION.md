@@ -17,7 +17,8 @@
    SHA-256 references. Observations contain replay position, processing time,
    session/frame IDs, source clip digest, and model/version metadata. YOLO records
    checkpoint and pipeline digests; exact ALPR weight digests remain pending.
-6. Stream/snapshot endpoints read cached annotated JPEGs. MP4 playback never runs
+6. Stream/snapshot endpoints read cached annotated JPEGs; previews use cached
+   320-pixel JPEGs with ETag revalidation. MJPEG consumers wait asynchronously. MP4 playback never runs
    inference. Health reports availability, errors, FPS, frame age and latency.
 7. Repository services derive interval statistics, candidate journeys, editable
    local rules, persistent human review and immutable report snapshots. React
@@ -27,8 +28,9 @@
 
 `schemas.py` validates finite timestamps/confidence, ordered boxes, query strings
 and rule configuration. Invalid requests return a consistent JSON error envelope.
-SQLite schema version 1 has sessions, observations, passages, alerts, reports,
-settings and audit tables; unknown future versions fail rather than silently open.
+SQLite schema version 2 has sessions, observations, passages, alerts, reports,
+settings, audit and report artifact leases. Version-1 reports migrate with their
+leases; unknown future versions fail rather than silently open.
 The camera catalog is still code configuration and journey links are derived,
 not independently migrated persistent models. The repository is intended for a
 single local API process, not a distributed ingestion deployment.
@@ -54,8 +56,9 @@ review, with null speed for equal/nonpositive timestamps.
 | --- | --- | --- |
 | GET | `/api/cameras`, `/api/health` | Catalog availability and actual processor health |
 | GET | `/api/video/{camera}`, `/api/stream/{camera}` | MP4 playback / shared annotated MJPEG |
+| GET | `/api/preview/{camera}` | Cached 320-pixel sampled JPEG; ETag / 304; missing 404 or unready 503 |
 | GET | `/api/snapshot/{camera}` | Fresh annotated JPEG; 404 missing or 503 not ready |
-| GET | `/api/events` | Raw reads; camera/plate/time/kind filters and bounded limit |
+| GET | `/api/events` | Raw reads; camera/plate/time filters and bounded limit |
 | GET | `/api/stats`, `/api/flows` | Frame/passages counts, confidence, computed accepted-link flows |
 | GET | `/api/trajectory/{plate}` | Supported observations, accepted/rejected/unresolved links |
 | GET | `/api/alerts`, `/api/rules` | Persistent rule alerts / current local configuration |
@@ -99,10 +102,13 @@ SHA-256 hashes canonical JSON excluding its own hash field; artifact bytes must
 match their referenced digests. Packages over 64 MiB are refused. Print contains
 both passage observations and supporting raw reads, rather than the dashboard.
 
-Reports expire after 24 hours. Seven-day observation/artifact cleanup runs from
-the processor; expiry checks still prevent access when processing is disabled.
-Source JPEG lifetime is independent of report lifetime; a package can return 410
-near the source-retention boundary. A model input frame is a decoded JPEG
+Reports expire after 24 hours. A separate lifespan maintenance thread cleans
+expired reports/leases and seven-day sources every minute, including when inference
+is disabled or fails. Active reports protect their existing source images until
+report expiry; version-1 reports receive leases during migration. Report creation
+checks referenced images and acquires leases under the same repository lock as
+cleanup. Missing or corrupt images reject creation; later manual file removal or
+corruption still fails download explicitly. A model input frame is a decoded JPEG
 **derivative**, not the original recording. The source clip digest identifies that
 recording. Hashes are not signatures, authenticated chain of custody, or proof of
 correct OCR. Report accesses and review changes receive local audit records;
@@ -121,3 +127,18 @@ See `PROGRESS.md` for every task from the implementation plan. Core engineering
 improvements do not satisfy missing-footage accuracy gates. Optional restoration,
 learned identity/topology, RTSP integration and production deployment remain
 separate, unimplemented work packages.
+
+## Desktop performance
+
+The wall mounts six 320×180 sampled previews and one focused native MP4 player.
+Switch to “Sampled detections” for the shared annotated stream, which shows its
+actual low sampling FPS. Playback has no detection overlay and can be paused or
+seeked independently; it does not seek the shared processor. Media starts after
+the intro is dismissed. Hidden pages stop polling, abort pending reads and pause
+playback; return triggers refresh. Serial polling cannot pile up overlapping
+requests. Analytics/activity share the root camera catalog, and the log requests
+only its most recent 40 rows. The CPU default uses two Torch intra-op threads and
+one FFmpeg decoder thread per capture; `AI26_CPU_THREADS` permits 1–8 Torch threads.
+
+See `PERFORMANCE.md` for measured results and their limits. Sparse sampling remains
+an accuracy limitation; these changes do not claim real-time full-frame inference.

@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useState } from "react"
+import { usePolling } from "@/hooks/usePolling"
 import { Menu, ShieldCheck } from "lucide-react"
 import { getCameras, type Camera } from "@/lib/api"
 import { CameraWall } from "@/components/CameraWall"
@@ -28,21 +29,16 @@ export default function App() {
   const [cameras, setCameras] = useState<Camera[]>([])
   const [cameraError, setCameraError] = useState<string | null>(null)
   const [focused, setFocused] = useState<string>("CAM-01")
-  const [focusedPosition, setFocusedPosition] = useState<number>()
-  const [focusedAnchor, setFocusedAnchor] = useState<number>()
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [page, setPage] = useState<Page>("cameras")
-  const [introVisible, setIntroVisible] = useState(true)
+  const [introVisible, setIntroVisible] = useState(() => !window.matchMedia("(prefers-reduced-motion: reduce)").matches)
 
-  useEffect(() => {
-    let alive = true
-    const tick = () => getCameras().then((c) => {
-      if (alive) { setCameras(c); setCameraError(null) }
-    }).catch((error: Error) => alive && setCameraError(error.message))
-    tick()
-    const timer = setInterval(tick, 3000)
-    return () => { alive = false; clearInterval(timer) }
-  }, [])
+  usePolling(async signal => {
+    try {
+      const result = await getCameras(signal)
+      if (!signal.aborted) { setCameras(result); setCameraError(null) }
+    } catch (error) { if (!signal.aborted) setCameraError(error instanceof Error ? error.message : "Camera API unavailable") }
+  }, 3000)
 
   const closeNavigation = useCallback(() => setDrawerOpen(false), [])
   const focusedCam = cameras.find((c) => c.id === focused)
@@ -52,11 +48,7 @@ export default function App() {
     setDrawerOpen(false)
   }
 
-  function focusCamera(id: string, position?: number) {
-    setFocused(id)
-    setFocusedPosition(position)
-    setFocusedAnchor(position === undefined ? undefined : Date.now() / 1000)
-  }
+  const focusCamera = useCallback((id: string) => setFocused(id), [])
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">
@@ -94,21 +86,21 @@ export default function App() {
 
       <main className="min-h-0 flex-1">
         {cameraError && <div className="absolute left-1/2 top-16 z-30 -translate-x-1/2 rounded-md border border-red-400/30 bg-red-950/90 px-3 py-2 text-xs text-red-100">Camera API unavailable: {cameraError}</div>}
-        {page === "cameras" && (
+        {page === "cameras" && !introVisible && (
           <div className="grid h-full grid-rows-[260px_1fr]">
             <div className="min-h-0 border-b border-zinc-800 bg-black">
               <CameraWall cameras={cameras} focused={focused} onFocus={focusCamera} />
             </div>
             <div className="min-h-0">
-              <MainVideo camera={focusedCam} startAt={focusedPosition} anchorAt={focusedAnchor} />
+              <MainVideo camera={focusedCam} />
             </div>
           </div>
         )}
         {page === "map" && <MapView cameras={cameras} focused={focused} onFocus={focusCamera} />}
-        {page === "congestion" && <CongestionPage />}
+        {page === "congestion" && <CongestionPage cameras={cameras} />}
         {page === "timeline" && <TimelinePage cameras={cameras} />}
         {page === "alerts" && <AlertsPanel />}
-        {page === "analytics" && <AnalyticsPanel />}
+        {page === "analytics" && <AnalyticsPanel cameras={cameras} />}
         {page === "query" && <QueryPage />}
       </main>
     </div>

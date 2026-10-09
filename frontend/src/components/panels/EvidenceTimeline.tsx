@@ -1,20 +1,17 @@
-import { useEffect, useState } from "react"
+import { usePolling } from "@/hooks/usePolling"
+import { useState } from "react"
 import { getEvents, type Camera, type DetectionEvent } from "@/lib/api"
 
 export function EvidenceTimeline({ cameras, focused }: { cameras: Camera[]; focused: string }) {
   const [events, setEvents] = useState<DetectionEvent[]>([])
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    let alive = true
-    const tick = () => getEvents({ camera: focused }).then((e) => { if (alive) { setEvents(e.slice(-40).reverse()); setError(null) } }).catch((reason: Error) => alive && setError(reason.message))
-    tick()
-    const id = setInterval(tick, 2000)
-    return () => {
-      alive = false
-      clearInterval(id)
-    }
-  }, [focused])
+  usePolling(async signal => {
+    try {
+      const result = await getEvents({ camera: focused, limit: 40 }, signal)
+      if (!signal.aborted) { setEvents(result.reverse()); setError(null) }
+    } catch (reason) { if (!signal.aborted) setError(reason instanceof Error ? reason.message : "Evidence unavailable") }
+  }, 2000)
 
   const cam = cameras.find((c) => c.id === focused)
 

@@ -26,16 +26,24 @@ def save_image(frame, role):
     return {'sha256': digest, 'role': role, 'media_type': 'image/jpeg', 'size': len(raw), 'url': f'/api/artifacts/{digest}'}
 
 
-def artifact_bytes(digest):
+def artifact_bytes(digest, protected_until=None):
     if not re.fullmatch(r'[a-f0-9]{64}', digest): return None
     path = ROOT / (digest + '.jpg')
-    if not path.is_file() or time.time()-path.stat().st_mtime >= 7*86400: return None
-    data = path.read_bytes()
+    try:
+        if not path.is_file(): return None
+        now = time.time()
+        if now-path.stat().st_mtime >= 7*86400 and (protected_until or 0) <= now: return None
+        data = path.read_bytes()
+    except FileNotFoundError:
+        return None
     if hashlib.sha256(data).hexdigest() != digest: raise ValueError('Artifact hash verification failed')
     return data
 
 
-def cleanup_artifacts(cutoff):
+def cleanup_artifacts(cutoff, protected=frozenset()):
     if ROOT.exists():
         for path in ROOT.glob('*.jpg'):
-            if path.stat().st_mtime < cutoff: path.unlink(missing_ok=True)
+            if path.stem in protected: continue
+            try:
+                if path.stat().st_mtime < cutoff: path.unlink(missing_ok=True)
+            except FileNotFoundError: pass

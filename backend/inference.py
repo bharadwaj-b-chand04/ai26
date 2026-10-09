@@ -1,4 +1,5 @@
 import time
+import os
 import hashlib
 from importlib.metadata import version
 from pathlib import Path
@@ -14,6 +15,9 @@ from tracking import CentroidTracker
 
 VEHICLE_CLASS_IDS = {2, 3, 5, 7}  # car, motorcycle, bus, truck (COCO)
 DEVICE = 0 if torch.cuda.is_available() else "cpu"
+CPU_THREADS = max(1,min(8,int(os.environ.get('AI26_CPU_THREADS','2'))))
+if DEVICE == 'cpu': torch.set_num_threads(CPU_THREADS)
+cv2.setNumThreads(1)
 
 # Canonical reads are retained independently of per-track identity consensus.
 from fusion import PlateConsensus
@@ -27,7 +31,7 @@ _yolo = YOLO(str(_checkpoint))
 with _checkpoint.open('rb') as _model_file:
     _checkpoint_hash = hashlib.file_digest(_model_file, 'sha256').hexdigest()
 _pipeline_hash = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
-_model_metadata = {"checkpoint_sha256": _checkpoint_hash, "torch_version": str(torch.__version__),
+_model_metadata = {"checkpoint_sha256": _checkpoint_hash, "torch_version": str(torch.__version__), "cpu_threads": CPU_THREADS,
                    "ultralytics_version": version("ultralytics"), "pipeline_sha256": _pipeline_hash}
 _alpr = None
 
@@ -49,6 +53,9 @@ CRIT = (114, 92, 255)
 def annotate_vehicle_frame(frame, camera_id: str):
     """Runs real YOLO vehicle detection, draws boxes, returns (frame, detections)."""
     results = _yolo.predict(frame, device=DEVICE, verbose=False, classes=list(VEHICLE_CLASS_IDS), conf=0.4)
+    # Ultralytics resets the thread count during its first predictor setup. Restore
+    # the desktop budget for subsequent inference; no global library patch needed.
+    if DEVICE == 'cpu' and torch.get_num_threads()!=CPU_THREADS: torch.set_num_threads(CPU_THREADS)
     detections = []
     r = results[0]
     raw_detections = []

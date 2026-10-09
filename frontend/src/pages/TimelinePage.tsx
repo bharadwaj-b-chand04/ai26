@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react"
+import { usePolling } from "@/hooks/usePolling"
+import { useState } from "react"
 import { FileText, Search } from "lucide-react"
 import { createEvidenceReport, getTrajectory, type Camera, type EvidenceReport, type Trajectory } from "@/lib/api"
 import { EvidenceTimeline } from "@/components/panels/EvidenceTimeline"
@@ -16,21 +17,12 @@ function Results({ query }: { query: Investigation }) {
   const [report, setReport] = useState<EvidenceReport | null>(null)
   const [exporting, setExporting] = useState(false)
   const interval = { since: query.since || "0", ...(query.until ? {until: query.until} : {}) }
-  useEffect(() => {
-    let alive = true, busy = false
-    const tick = async () => {
-      if (busy) return
-      busy = true
-      try {
-        const result = await getTrajectory(query.plate, {since: query.since || "0", ...(query.until ? {until:query.until} : {})})
-        if (alive) { setTrajectory(result); setError(null) }
-      } catch (e) { if (alive) setError(e instanceof Error ? e.message : "Investigation failed") }
-      finally { busy = false }
-    }
-    tick()
-    const timer = setInterval(tick, 3000)
-    return () => { alive = false; clearInterval(timer) }
-  }, [query.plate, query.since, query.until])
+  usePolling(async signal => {
+    try {
+      const result = await getTrajectory(query.plate, interval, signal)
+      if (!signal.aborted) { setTrajectory(result); setError(null) }
+    } catch (e) { if (!signal.aborted) setError(e instanceof Error ? e.message : "Investigation failed") }
+  }, 3000)
   async function generate() {
     if (exporting) return
     setExporting(true)

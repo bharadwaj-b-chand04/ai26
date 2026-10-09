@@ -1,26 +1,18 @@
-import { useEffect, useState } from "react"
-import { getCameras, getFlows, getStats, type Camera, type Stats } from "@/lib/api"
+import { usePolling } from "@/hooks/usePolling"
+import { useState } from "react"
+import { getFlows, getStats, type Camera, type Stats } from "@/lib/api"
 import { OsmMap } from "@/components/OsmMap"
 
-export function AnalyticsPanel() {
+export function AnalyticsPanel({ cameras }: { cameras: Camera[] }) {
   const [stats, setStats] = useState<Stats | null>(null)
-  const [cameras, setCameras] = useState<Camera[]>([])
   const [flows, setFlows] = useState<{from:string;to:string;count:number}[]>([])
   const [error, setError] = useState<string | null>(null)
-  useEffect(() => {
-    let alive = true, busy = false
-    const tick = async () => {
-      if (busy) return
-      busy = true
-      try {
-        const [s,c,f] = await Promise.all([getStats(),getCameras(),getFlows()])
-        if (alive) {setStats(s);setCameras(c);setFlows(f);setError(null)}
-      } catch(e) {if(alive)setError(e instanceof Error?e.message:"Analytics failed")}
-      finally {busy=false}
-    }
-    tick();const timer=setInterval(tick,3000)
-    return ()=>{alive=false;clearInterval(timer)}
-  },[])
+  usePolling(async signal => {
+    try {
+      const [s, f] = await Promise.all([getStats(signal), getFlows(signal)])
+      if (!signal.aborted) { setStats(s); setFlows(f); setError(null) }
+    } catch (e) { if (!signal.aborted) setError(e instanceof Error ? e.message : "Activity unavailable") }
+  }, 3000)
   const counts=Object.entries(stats?.per_camera_passages ?? {}).sort((a,b)=>b[1]-a[1])
   const processing=cameras.filter((c)=>c.health.last_frame_at && (c.health.frame_age_seconds ?? Infinity)<15 && ["processing","loading"].includes(c.health.status)).length
   return <div className="h-full overflow-y-auto bg-black p-4 text-white sm:p-6"><div className="mx-auto flex max-w-5xl flex-col gap-4">

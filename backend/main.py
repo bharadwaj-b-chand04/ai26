@@ -22,13 +22,19 @@ from stream import mjpeg_generator, snapshot_frame
 from plate_format import normalize_plate
 from repository import canonical_json
 from artifacts import artifact_bytes
+from maintenance import Maintenance
 
 
 @asynccontextmanager
 async def lifespan(app):
-    if os.environ.get('AI26_PROCESSING_ENABLED','1')=='1': processor.start()
-    try: yield
-    finally: await asyncio.to_thread(processor.stop)
+    janitor = Maintenance(store)
+    janitor.start()
+    try:
+        if os.environ.get('AI26_PROCESSING_ENABLED','1')=='1': processor.start()
+        yield
+    finally:
+        await asyncio.to_thread(processor.stop)
+        await asyncio.to_thread(janitor.stop)
 
 frontend_port=os.environ.get('AI26_FRONTEND_PORT','5174')
 app=FastAPI(title='AI26 observation API',lifespan=lifespan)
@@ -69,7 +75,7 @@ def list_cameras():
 @app.get('/api/health')
 def health():
     return {'processing_enabled':os.environ.get('AI26_PROCESSING_ENABLED','1')=='1','cameras':processor.health(),
-            'database_schema':1,'scope':'single API process; run uvicorn with one worker'}
+            'database_schema':store.schema_version,'scope':'single API process; run uvicorn with one worker'}
 
 @app.get('/api/stream/{camera_id}')
 def stream(camera_id:str,start:float|None=None,anchor:float|None=None):
@@ -90,6 +96,17 @@ def snapshot(camera_id:str):
     jpeg=snapshot_frame(camera_id)
     if not jpeg: raise HTTPException(503,'No current processed frame; check camera health')
     return Response(content=jpeg,media_type='image/jpeg')
+
+@app.get('/api/preview/{camera_id}')
+def preview(camera_id:str,request:Request):
+    check_camera(camera_id)
+    if not camera_source(camera_id).is_file(): raise HTTPException(404,'Camera source is unavailable')
+    latest=processor.preview(camera_id)
+    if not latest: raise HTTPException(503,'Preview is not ready; check camera health')
+    etag='"'+hashlib.sha256(latest[1]).hexdigest()+'"'
+    headers={'ETag':etag,'Cache-Control':'private, no-cache','X-Frame-Time':str(latest[0])}
+    if request.headers.get('if-none-match')==etag: return Response(status_code=304,headers=headers)
+    return Response(content=latest[1],media_type='image/jpeg',headers=headers)
 
 @app.get('/api/events')
 def events(camera:str|None=None,plate:str|None=None,since:TimeFilter=None,until:TimeFilter=None,limit:Annotated[int,Query(ge=1,le=5000)]=5000):
@@ -163,7 +180,7 @@ def report_package(report_id:str):
         if sum(a['size'] for a in report['artifacts']) > 64*1024*1024:
             raise HTTPException(413,'Artifact package exceeds 64 MiB; choose a shorter interval')
         for artifact in report['artifacts']:
-            try: data=artifact_bytes(artifact['sha256'])
+            try: data=artifact_bytes(artifact['sha256'], report['expires_at'])
             except ValueError as exc: raise HTTPException(409,str(exc)) from exc
             if data is None: raise HTTPException(410,'A report artifact has expired or is missing')
             package.writestr(f'artifacts/{artifact["sha256"]}.jpg',data)
@@ -171,7 +188,7 @@ def report_package(report_id:str):
 
 @app.get('/api/artifacts/{digest}')
 def artifact(digest:str):
-    try: data=artifact_bytes(digest)
+    try: data=artifact_bytes(digest, store.artifact_expiry(digest, time.time()))
     except ValueError as exc: raise HTTPException(409,str(exc)) from exc
     if data is None: raise HTTPException(404,'Artifact unavailable or expired')
     return Response(data,media_type='image/jpeg')

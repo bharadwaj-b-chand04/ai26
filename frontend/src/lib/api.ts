@@ -113,21 +113,21 @@ async function requestJson<T>(input: RequestInfo | URL, init?: RequestInit): Pro
   return response.json() as Promise<T>
 }
 
-export async function getCameras(): Promise<Camera[]> {
-  return requestJson<Camera[]>("/api/cameras")
+export async function getCameras(signal?: AbortSignal): Promise<Camera[]> {
+  return requestJson<Camera[]>("/api/cameras", { signal })
 }
 
-export async function getEvents(params: { camera?: string; plate?: string } = {}): Promise<DetectionEvent[]> {
-  const q = new URLSearchParams(params as Record<string, string>).toString()
-  return requestJson<DetectionEvent[]>(`/api/events${q ? `?${q}` : ""}`)
+export async function getEvents(params: { camera?: string; plate?: string; limit?: number } = {}, signal?: AbortSignal): Promise<DetectionEvent[]> {
+  const q = new URLSearchParams(Object.entries(params).map(([key, value]) => [key, String(value)])).toString()
+  return requestJson<DetectionEvent[]>(`/api/events${q ? `?${q}` : ""}`, { signal })
 }
 
-export async function getAlerts(): Promise<Alert[]> {
-  return requestJson<Alert[]>("/api/alerts")
+export async function getAlerts(signal?: AbortSignal): Promise<Alert[]> {
+  return requestJson<Alert[]>("/api/alerts", { signal })
 }
 
-export async function getStats(): Promise<Stats> {
-  return requestJson<Stats>("/api/stats")
+export async function getStats(signal?: AbortSignal): Promise<Stats> {
+  return requestJson<Stats>("/api/stats", { signal })
 }
 
 export async function askNL(question: string): Promise<{ text: string; sql?: string }> {
@@ -138,8 +138,8 @@ export async function askNL(question: string): Promise<{ text: string; sql?: str
   })
 }
 
-export async function getTrajectory(plate: string, interval: Record<string, string> = {}): Promise<Trajectory> {
-  return requestJson<Trajectory>(`/api/trajectory/${encodeURIComponent(plate)}?${new URLSearchParams(interval)}`)
+export async function getTrajectory(plate: string, interval: Record<string, string> = {}, signal?: AbortSignal): Promise<Trajectory> {
+  return requestJson<Trajectory>(`/api/trajectory/${encodeURIComponent(plate)}?${new URLSearchParams(interval)}`, { signal })
 }
 
 export async function createEvidenceReport(plate: string, interval: Record<string, string> = {}): Promise<EvidenceReport> {
@@ -167,8 +167,8 @@ export function snapshotUrl(cameraId: string) {
   return `/api/snapshot/${cameraId}?t=${Date.now()}`
 }
 
-export async function getFlows(): Promise<{ from: string; to: string; count: number }[]> {
-  return requestJson("/api/flows")
+export async function getFlows(signal?: AbortSignal): Promise<{ from: string; to: string; count: number }[]> {
+  return requestJson("/api/flows", { signal })
 }
 export async function reviewAlert(id: string, state: string, reviewer: string, note: string) {
   return requestJson(`/api/alerts/${encodeURIComponent(id)}/review`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({state, reviewer, note}) })

@@ -1,9 +1,10 @@
 """Read-only consumers of shared inference frames. No capture/model/event side effects."""
 import time
+import asyncio
 from processing import processor
 
 
-def mjpeg_generator(camera_id, start_at=None, anchor_at=None):
+async def mjpeg_generator(camera_id, start_at=None, anchor_at=None):
     previous=None
     # start/anchor remain accepted for old clients; shared processing cannot be seeked by a viewer.
     idle_deadline=time.monotonic()+30
@@ -15,7 +16,7 @@ def mjpeg_generator(camera_id, start_at=None, anchor_at=None):
             yield b'--frame\r\nContent-Type: image/jpeg\r\n\r\n'+jpeg+b'\r\n'
         elif time.monotonic()>idle_deadline:
             return
-        time.sleep(.1)
+        await asyncio.sleep(.1)
 
 
 def snapshot_frame(camera_id):

@@ -1,3 +1,4 @@
+import { usePolling } from "@/hooks/usePolling"
 import { useEffect, useState } from "react"
 import { getAlerts, getCameras, getRules, reviewAlert, saveRules, type Alert, type Camera, type RuleConfig } from "@/lib/api"
 import { DEMO_ALERTS } from "@/lib/demo"
@@ -50,12 +51,12 @@ export function AlertsPanel() {
   const [note,setNote]=useState("")
   const [busy,setBusy]=useState<string|null>(null)
   const [error,setError]=useState<string|null>(null)
-  useEffect(()=>{
-    let alive=true,pending=false
-    const tick=async()=>{if(pending)return;pending=true;try{const a=await getAlerts();if(alive){setAlerts(a);setError(null)}}catch(e){if(alive)setError(e instanceof Error?e.message:"Alerts failed")}finally{pending=false}}
-    tick();const timer=setInterval(tick,3000)
-    return()=>{alive=false;clearInterval(timer)}
-  },[])
+  usePolling(async signal => {
+    try {
+      const result = await getAlerts(signal)
+      if (!signal.aborted) { setAlerts(result); setError(null) }
+    } catch (e) { if (!signal.aborted) setError(e instanceof Error ? e.message : "Alerts failed") }
+  }, 3000, !demo)
   async function review(alert:Alert,state:string){
     if(!alert.alert_id||busy)return
     if(!reviewer.trim()){setError("Enter your reviewer name before recording a decision");return}
