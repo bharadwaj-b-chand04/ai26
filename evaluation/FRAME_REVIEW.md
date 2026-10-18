@@ -32,7 +32,7 @@ python -m http.server 5176 --bind 127.0.0.1 \
 Open `http://127.0.0.1:5176/` and:
 
 1. Enter your reviewer name.
-2. Count visible cars, buses, trucks, motorcycles and bicycles. Include
+2. Count visible cars, buses, trucks and motorcycles. Include
    identifiable partial vehicles; exclude people, reflections and vehicles on
    signs. Enter zero explicitly when no vehicle is visible.
 3. For count-only review, leave the complete-vehicle-boxes checkbox unchecked.
@@ -49,6 +49,19 @@ Open `http://127.0.0.1:5176/` and:
    accuracy denominators later.
 7. Export labels JSON at the end of each session. Use Import labels to restore
    a saved file for the same set. Replacing a nonempty draft needs confirmation.
+
+The page flags counts smaller than the number of drawn vehicle boxes, including
+older exports that previously allowed this. Those entries remain available for
+correction; they are not silently relabeled. **Go to next count check** navigates
+between conflicts. **Use drawn-box count** explicitly copies the box total into
+the input, returns the frame to pending, and still requires you to inspect and
+save it. Remove duplicate or incorrect boxes instead when appropriate. A blank
+count is pending; enter zero and save when the frame truly contains no vehicle.
+
+The current count scope matches the running app: cars, buses, trucks and
+motorcycles. The first version of the guide also mentioned bicycles; that was
+an instruction error, corrected after the first export. Legacy bicycle boxes
+can be imported for correction but are outside runtime count scoring.
 
 Drafts are autosaved in this browser's localStorage under the review-set ID.
 Changing browser/profile/URL origin, clearing browser data, private-mode limits
@@ -110,3 +123,41 @@ Report these limitations and frame/clip denominators with later results.
 Raw frames, plate labels and generated review files stay under git-ignored
 `backend/data/`. The generator, interface and synthetic tests can be versioned
 without publishing footage or human plate transcriptions.
+
+## Audit an export and compare frame counts
+
+The count runner verifies the export's set/sample identities and every reviewed
+JPEG hash, preserves exact input snapshots, and excludes pending, unusable and
+contradictory count entries. It never marks partial boxes complete. The example
+below performs an audit only; outputs must be beneath `backend/data/review/`.
+
+```bash
+AI26_CPU_THREADS=1 uv run --frozen --directory backend python ../evaluation/evaluate_frame_counts.py \
+  --manifest data/review/frame-set-2026-10-18/manifest.json \
+  --labels /absolute/path/to/exported-labels.json \
+  --output data/review/frame-set-2026-10-18/audit-NEW-NAME
+```
+
+Add `--expected-model-sha256 DIGEST` to run the current vehicle model on eligible
+review JPEGs. Obtain and verify the desired loaded checkpoint digest from the
+app's administrator health view first. A mismatching checkpoint stops the run;
+no model or label is promoted. Run with the same runtime model configuration as
+the desired baseline. The offline CPU-thread setting does not change the running
+API process. No inference observations are ingested.
+
+`summary.json` records input/model digests, inclusion/exclusion counts, per-camera
+count metrics and limitations. `predictions.json` holds private per-frame model
+boxes, and `results.md` summarizes the comparison and count conflicts. Metrics
+are mean absolute count error, RMSE, signed count error and exact *frame-count*
+agreement. Summed frame counts can repeat the same vehicles. Matching a count
+does not establish correct localization, classification or identity. Latencies
+in private prediction rows are incidental, not a controlled benchmark.
+
+An incomplete export can support an explicitly preliminary comparison without
+being called a held-out detector benchmark. The first export had 17 reviewed
+frames and 28 pending; five reviewed frames contradicted their drawn-box counts,
+leaving twelve count-consistent frames for exploratory scoring. No frame was
+declared to have complete vehicle-box coverage. The one readable plate was on
+a pending frame, so this export did not add a confirmed readable-plate example
+to the count comparison. See the sanitized validation register for the measured
+result and limitations.

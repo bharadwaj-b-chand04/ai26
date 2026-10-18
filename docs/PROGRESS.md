@@ -19,6 +19,20 @@ created, and the inspected source clips do not form an independent held-out set.
 See [the review workflow](../evaluation/FRAME_REVIEW.md). Evaluation tasks remain
 partial until reviewed labels, corresponding predictions, and suitable data exist.
 
+The first exported frame labels were subsequently audited: 17 reviewed, 28
+pending (four with draft labels), and seven count/box conflicts (five on reviewed
+frames). The count runner preserved the exact export and selected only twelve
+count-consistent reviewed frames. The pinned running YOLO checkpoint, applied
+offline to their exact hashed review JPEGs at confidence 0.4, matched six counts;
+mean absolute count error was 0.583 vehicles/frame. This is preliminary selected
+frame-count agreement, not detector accuracy or an independent held-out result.
+No box coverage was confirmed and no detector precision/recall was computed.
+The review guide's initial inclusion of bicycles was corrected to the runtime's
+four motor-vehicle classes and is disclosed in the result. Conflicting saved
+labels can now be repaired in the page without changing the original export.
+Six count-evaluation tests and isolated desktop/mobile repair checks pass. See
+[the exported-label comparison](validation/frame-count-review-2026-10-18.json).
+
 ## What now works
 
 Shared background six-camera processing; durable SQLite observations/passages;

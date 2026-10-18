@@ -1,0 +1,249 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-10-18T11:16:42.508844+00:00",
+  "labels_sha256": "4d2bfb8d6426785c7e26e777f76513ca1dc63556d84eebf3101d15acc3bb6987",
+  "manifest_sha256": "3363cf791b00a80b90e626a713529950a40aa19bc8a07eb0bd9870edfe5215a6",
+  "audit": {
+    "review_set_id": "00d5f35404f8562ebc6d7c70e962c13925efac11c66e301b7fc103b7dc417a4e",
+    "frames": 45,
+    "status_counts": {
+      "pending": 28,
+      "reviewed": 17
+    },
+    "count_conflicts": [
+      {
+        "sample_id": "CAM-07-02",
+        "status": "reviewed",
+        "vehicle_count": 0,
+        "drawn_vehicle_boxes": 4,
+        "reason": "boxes_exceed_count"
+      },
+      {
+        "sample_id": "CAM-07-04",
+        "status": "reviewed",
+        "vehicle_count": 0,
+        "drawn_vehicle_boxes": 6,
+        "reason": "boxes_exceed_count"
+      },
+      {
+        "sample_id": "CAM-08-01",
+        "status": "reviewed",
+        "vehicle_count": 0,
+        "drawn_vehicle_boxes": 7,
+        "reason": "boxes_exceed_count"
+      },
+      {
+        "sample_id": "CAM-08-04",
+        "status": "reviewed",
+        "vehicle_count": 2,
+        "drawn_vehicle_boxes": 8,
+        "reason": "boxes_exceed_count"
+      },
+      {
+        "sample_id": "CAM-08-05",
+        "status": "reviewed",
+        "vehicle_count": 0,
+        "drawn_vehicle_boxes": 4,
+        "reason": "boxes_exceed_count"
+      },
+      {
+        "sample_id": "CAM-09-03",
+        "status": "pending",
+        "vehicle_count": 0,
+        "drawn_vehicle_boxes": 2,
+        "reason": "boxes_exceed_count"
+      },
+      {
+        "sample_id": "CAM-09-05",
+        "status": "pending",
+        "vehicle_count": 0,
+        "drawn_vehicle_boxes": 3,
+        "reason": "boxes_exceed_count"
+      }
+    ],
+    "pending_sample_ids": [
+      "CAM-01-01",
+      "CAM-01-02",
+      "CAM-01-03",
+      "CAM-01-04",
+      "CAM-01-05",
+      "CAM-02-01",
+      "CAM-02-03",
+      "CAM-02-04",
+      "CAM-02-05",
+      "CAM-03-01",
+      "CAM-03-04",
+      "CAM-03-05",
+      "CAM-04-03",
+      "CAM-04-04",
+      "CAM-04-05",
+      "CAM-05-03",
+      "CAM-05-04",
+      "CAM-05-05",
+      "CAM-06-01",
+      "CAM-06-02",
+      "CAM-06-03",
+      "CAM-06-04",
+      "CAM-06-05",
+      "CAM-07-01",
+      "CAM-07-05",
+      "CAM-09-03",
+      "CAM-09-04",
+      "CAM-09-05"
+    ],
+    "pending_draft_sample_ids": [
+      "CAM-07-01",
+      "CAM-07-05",
+      "CAM-09-03",
+      "CAM-09-05"
+    ],
+    "eligible_count_sample_ids": [
+      "CAM-02-02",
+      "CAM-03-02",
+      "CAM-03-03",
+      "CAM-04-01",
+      "CAM-04-02",
+      "CAM-05-01",
+      "CAM-05-02",
+      "CAM-07-03",
+      "CAM-08-02",
+      "CAM-08-03",
+      "CAM-09-01",
+      "CAM-09-02"
+    ],
+    "complete_vehicle_box_frames": 0,
+    "readable_plates_on_eligible_frames": 0,
+    "detector_precision_recall": null,
+    "ocr_exact_match_rate": null,
+    "reviewed_count_conflicts": 5,
+    "eligible_count_frames": 12
+  },
+  "count_metrics": {
+    "evaluated_frames": 12,
+    "mean_absolute_error": 0.5833333333333334,
+    "root_mean_squared_error": 0.8660254037844386,
+    "mean_signed_error": -0.25,
+    "exact_count_frames": 6,
+    "exact_frame_count_agreement": 0.5,
+    "summed_human_frame_counts": 26,
+    "summed_predicted_frame_counts": 23
+  },
+  "per_camera": {
+    "CAM-02": {
+      "evaluated_frames": 1,
+      "mean_absolute_error": 0.0,
+      "root_mean_squared_error": 0.0,
+      "mean_signed_error": 0.0,
+      "exact_count_frames": 1,
+      "exact_frame_count_agreement": 1.0,
+      "summed_human_frame_counts": 1,
+      "summed_predicted_frame_counts": 1
+    },
+    "CAM-03": {
+      "evaluated_frames": 2,
+      "mean_absolute_error": 0.0,
+      "root_mean_squared_error": 0.0,
+      "mean_signed_error": 0.0,
+      "exact_count_frames": 2,
+      "exact_frame_count_agreement": 1.0,
+      "summed_human_frame_counts": 2,
+      "summed_predicted_frame_counts": 2
+    },
+    "CAM-04": {
+      "evaluated_frames": 2,
+      "mean_absolute_error": 0.0,
+      "root_mean_squared_error": 0.0,
+      "mean_signed_error": 0.0,
+      "exact_count_frames": 2,
+      "exact_frame_count_agreement": 1.0,
+      "summed_human_frame_counts": 2,
+      "summed_predicted_frame_counts": 2
+    },
+    "CAM-05": {
+      "evaluated_frames": 2,
+      "mean_absolute_error": 1.0,
+      "root_mean_squared_error": 1.0,
+      "mean_signed_error": 0.0,
+      "exact_count_frames": 0,
+      "exact_frame_count_agreement": 0.0,
+      "summed_human_frame_counts": 2,
+      "summed_predicted_frame_counts": 2
+    },
+    "CAM-07": {
+      "evaluated_frames": 1,
+      "mean_absolute_error": 0.0,
+      "root_mean_squared_error": 0.0,
+      "mean_signed_error": 0.0,
+      "exact_count_frames": 1,
+      "exact_frame_count_agreement": 1.0,
+      "summed_human_frame_counts": 6,
+      "summed_predicted_frame_counts": 6
+    },
+    "CAM-08": {
+      "evaluated_frames": 2,
+      "mean_absolute_error": 1.5,
+      "root_mean_squared_error": 1.5811388300841898,
+      "mean_signed_error": -1.5,
+      "exact_count_frames": 0,
+      "exact_frame_count_agreement": 0.0,
+      "summed_human_frame_counts": 10,
+      "summed_predicted_frame_counts": 7
+    },
+    "CAM-09": {
+      "evaluated_frames": 2,
+      "mean_absolute_error": 1.0,
+      "root_mean_squared_error": 1.0,
+      "mean_signed_error": 0.0,
+      "exact_count_frames": 0,
+      "exact_frame_count_agreement": 0.0,
+      "summed_human_frame_counts": 3,
+      "summed_predicted_frame_counts": 3
+    }
+  },
+  "model": {
+    "checkpoint_sha256": "f59b3d833e2ff32e194b5bb8e08d211dc7c5bdf144b90d2c8412c47ccfc83b36",
+    "checkpoint_name": "yolov8n.pt",
+    "confidence_threshold": 0.4,
+    "class_ids": [
+      2,
+      3,
+      5,
+      7
+    ],
+    "device": "cpu",
+    "cpu_threads": 1,
+    "pipeline_sha256": "db5df8809bed9bd3f798a9a36c8728cddbaf95288e94938f5c5983b23707fd25",
+    "ultralytics_version": "8.4.155"
+  },
+  "scope": "Exploratory per-frame count comparison on reviewed JPEG derivatives. Not held-out accuracy, tracking, passages, unique vehicles or operational performance.",
+  "limitations": [
+    "Only reviewed frames without contradictory counts/boxes are included.",
+    "Partial box sets are not promoted into complete detector ground truth.",
+    "The original review guide included bicycles; runtime YOLO counts car, bus, truck and motorcycle only. Review this class scope before treating results as definitive.",
+    "No bicycle boxes were supplied on eligible frames; unlabeled bicycles cannot be independently ruled out.",
+    "Source clips were previously inspected; repeated vehicles and correlated frames are possible.",
+    "Six sources are playback copies. Inference here uses the exact hashed JPEG derivatives shown during review.",
+    "Model outputs are not written into the app database or human labels."
+  ],
+  "prediction_records_sha256": "702884b8b1ff338342f068eb8cb3cdc3ba4f52944cf663db9d7b4f8e365e309f",
+  "verification": {
+    "count_runner_synthetic_tests_passed": 6,
+    "browser_repair_flow": {
+      "legacy_export_restored_without_changes_to_file": true,
+      "invalid_saved_count_rejected": true,
+      "explicit_box_count_helper_leaves_frame_pending": true,
+      "next_conflict_navigation": true,
+      "desktop_viewport": [
+        1440,
+        1000
+      ],
+      "mobile_viewport": [
+        390,
+        844
+      ],
+      "mobile_document_width": 390,
+      "javascript_errors": 0
+    },
+    "original_export_unchanged": true
+  }
+}
