@@ -24,10 +24,12 @@ class Maintenance:
     def run_once(self, now=None):
         now = time.time() if now is None else now
         cutoff = now - self.retention_days*86400
-        # Report insertion and lease checks share this lock with cleanup.
+        # Keep database cleanup transactional, but release the repository lock
+        # before walking the artifact directory so API reads can continue.
         with self.repository.lock:
             self.repository.cleanup(cutoff, now, self.traffic_retention_days)
-            cleanup_artifacts(cutoff, self.repository.protected_artifacts(now))
+            protected = self.repository.protected_artifacts(now)
+        cleanup_artifacts(cutoff, protected)
 
     def start(self):
         if self.thread and self.thread.is_alive(): return

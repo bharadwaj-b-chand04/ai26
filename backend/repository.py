@@ -732,7 +732,10 @@ class Repository:
             self.db.execute('DELETE FROM artifact_leases WHERE expires<=?', (now,))
             self.db.execute('DELETE FROM reports WHERE expires<=?', (now,))
             self.db.execute('DELETE FROM alerts WHERE ts<?', (cutoff,))
-            self.db.execute("DELETE FROM sessions WHERE started<? AND NOT EXISTS (SELECT 1 FROM observations WHERE json_extract(observations.data,'$.session_id')=sessions.id)", (cutoff,))
+            # Materialize active session IDs once. A correlated JSON lookup here
+            # rescanned the entire observations table for every expired session,
+            # keeping the repository lock for minutes on larger local databases.
+            self.db.execute("DELETE FROM sessions WHERE started<? AND id NOT IN (SELECT json_extract(data,'$.session_id') FROM observations WHERE json_extract(data,'$.session_id') IS NOT NULL)", (cutoff,))
             self.db.execute('DELETE FROM auth_sessions WHERE expires_at<=?', (now,))
             self.db.execute('DELETE FROM auth_login_failures WHERE failed_at<=?', (now-900,))
 

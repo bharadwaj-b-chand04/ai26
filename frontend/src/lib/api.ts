@@ -444,7 +444,21 @@ async function requestJson<T>(input: RequestInfo | URL, init?: RequestInit): Pro
 }
 
 export async function getCameras(signal?: AbortSignal): Promise<Camera[]> {
-  return requestJson<Camera[]>("/api/cameras", { signal })
+  const controller = new AbortController()
+  let timedOut = false
+  const abortFromCaller = () => controller.abort()
+  if (signal?.aborted) controller.abort()
+  else signal?.addEventListener("abort", abortFromCaller, { once: true })
+  const timeout = window.setTimeout(() => { timedOut = true; controller.abort() }, 10000)
+  try {
+    return await requestJson<Camera[]>("/api/cameras", { signal: controller.signal })
+  } catch (error) {
+    if (timedOut) throw new Error("Camera list request timed out")
+    throw error
+  } finally {
+    window.clearTimeout(timeout)
+    signal?.removeEventListener("abort", abortFromCaller)
+  }
 }
 
 export function getPrivacyStatus(signal?: AbortSignal): Promise<PrivacyStatus> {

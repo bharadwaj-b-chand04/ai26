@@ -116,7 +116,7 @@ export function OsmMap({
             const x = position.x - viewport.left
             const y = position.y - viewport.top
             const active = point.active
-            const color = point.color ?? (active ? "#ff5c72" : "#22d3c8")
+            const color = active ? "#ff5c72" : point.color ?? "#22d3c8"
             return (
               <g
                 key={point.id}

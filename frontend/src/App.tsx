@@ -47,6 +47,7 @@ function Dashboard({ user, caseIds, context, signOut, changeContext }: {
 }) {
   const [cameras, setCameras] = useState<Camera[]>([])
   const [cameraError, setCameraError] = useState<string | null>(null)
+  const [cameraListLoaded, setCameraListLoaded] = useState(false)
   const [focused, setFocused] = useState<string>("CAM-01")
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [page, setPage] = useState<Page>("cameras")
@@ -59,8 +60,8 @@ function Dashboard({ user, caseIds, context, signOut, changeContext }: {
   usePolling(async signal => {
     try {
       const result = await getCameras(signal)
-      if (!signal.aborted) { setCameras(result); setCameraError(null) }
-    } catch (error) { if (!signal.aborted) setCameraError(error instanceof Error ? error.message : "Camera API unavailable") }
+      if (!signal.aborted) { setCameras(result); setCameraError(null); setCameraListLoaded(true) }
+    } catch (error) { if (!signal.aborted) { setCameraError(error instanceof Error ? error.message : "Camera API unavailable"); setCameraListLoaded(true) } }
   }, 5000)
 
   const closeNavigation = useCallback(() => setDrawerOpen(false), [])
@@ -100,7 +101,7 @@ function Dashboard({ user, caseIds, context, signOut, changeContext }: {
             Plate format / no registry verification
           </span>
           <span className="inline-flex items-center gap-1.5 rounded-md border border-white/20 bg-zinc-900 px-2.5 py-1 text-xs font-sans font-medium text-zinc-200">
-            <span className="h-1.5 w-1.5 rounded-full bg-white" /> {cameras.filter((c) => c.source_available).length}/{cameras.length} sources available
+            <span className="h-1.5 w-1.5 rounded-full bg-white" /> {cameraListLoaded ? `${cameras.filter((c) => c.source_available).length}/${cameras.length} sources available` : "Loading camera sources…"}
           </span>
         </div>
       </header>
@@ -120,7 +121,7 @@ function Dashboard({ user, caseIds, context, signOut, changeContext }: {
         {page === "cameras" && (
           <div className="grid h-full grid-rows-[260px_1fr]">
             <div className="min-h-0 border-b border-zinc-800 bg-black">
-              <CameraWall cameras={cameras} focused={focused} onFocus={focusCamera} />
+              <CameraWall cameras={cameras} focused={focused} onFocus={focusCamera} loading={!cameraListLoaded} error={cameraError} />
             </div>
             <div className="min-h-0">
               <MainVideo camera={focusedCam} />

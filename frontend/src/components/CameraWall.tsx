@@ -10,10 +10,14 @@ export const CameraWall = memo(function CameraWall({
   cameras,
   focused,
   onFocus,
+  loading = false,
+  error = null,
 }: {
   cameras: Camera[]
   focused: string
   onFocus: (id: string, position?: number) => void
+  loading?: boolean
+  error?: string | null
 }) {
   const [query, setQuery] = useState("")
   const [filter, setFilter] = useState<Filter>("all")
@@ -36,7 +40,7 @@ export const CameraWall = memo(function CameraWall({
             Camera Wall
           </span>
           <span className="rounded-full border border-zinc-800 bg-zinc-900 px-2 py-0.5 text-[11px] font-medium text-zinc-300">
-            {cameras.length}
+            {loading ? "…" : cameras.length}
           </span>
         </div>
 
@@ -136,7 +140,7 @@ export const CameraWall = memo(function CameraWall({
           })}
           {cameras.length === 0 ? (
             <div role="status" className="col-span-full py-12 text-center text-xs text-zinc-400 font-sans">
-              No cameras are assigned to this case. An administrator can assign cameras in User administration.
+              {loading ? "Loading cameras…" : error ? "Camera list unavailable. Retrying…" : "No cameras are available for this view. If you use case access, ask an administrator to assign cameras in User administration."}
             </div>
           ) : filtered.length === 0 && (
             <div className="col-span-full py-12 text-center text-xs text-zinc-500 font-sans">
