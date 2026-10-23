@@ -38,6 +38,28 @@ class InferenceBranches(unittest.TestCase):
              patch.dict(sys.modules,{'inference':module}):
             self.assertEqual(processing.annotate(frame,'plate','CAM-07'),(vehicle_frame,[vehicle]))
 
+    def test_combined_plate_and_vehicle_branches_keep_both_overlays(self):
+        import numpy as np
+        raw=np.zeros((12,12,3),dtype=np.uint8)
+        vehicle_frame=raw.copy()
+        vehicle_frame[2:5,2]=[0,255,0]
+        plate_frame=raw.copy()
+        plate_frame[7:10,7]=[0,0,255]
+        vehicle={'kind':'vehicle','bbox':[2,2,5,5]}
+        plate={'kind':'plate','bbox':[7,7,10,10]}
+        module=SimpleNamespace(
+            annotate_vehicle_frame=lambda original,camera:(vehicle_frame,[vehicle]),
+            take_person_boxes=lambda camera:[],
+            annotate_plate_frame=lambda original,camera:(plate_frame,[plate]),
+        )
+        with patch.object(processing,'VEHICLE_DETECTION_ENABLED',True), \
+             patch.object(processing,'PLATE_RECOGNITION_ENABLED',True), \
+             patch.dict(sys.modules,{'inference':module}):
+            annotated,detections=processing.annotate(raw.copy(),'plate','CAM-07')
+        self.assertTrue(np.array_equal(annotated[3,2],[0,255,0]))
+        self.assertTrue(np.array_equal(annotated[8,7],[0,0,255]))
+        self.assertEqual(detections,[plate,vehicle])
+
     def test_privacy_mode_rejects_disabling_person_detection_branch(self):
         with patch.object(processing,'VEHICLE_DETECTION_ENABLED',False), \
              patch('privacy.enabled',return_value=True):

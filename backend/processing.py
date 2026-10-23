@@ -84,9 +84,17 @@ def annotate(frame, kind, camera_id):
         return annotate_vehicle_frame(frame, camera_id)
     if not VEHICLE_DETECTION_ENABLED and not PLATE_RECOGNITION_ENABLED: return frame, []
     raw = frame.copy()
+    vehicle_overlay_mask = None
     if VEHICLE_DETECTION_ENABLED:
         from inference import annotate_vehicle_frame, take_person_boxes
         frame, vehicles = annotate_vehicle_frame(frame, camera_id)
+        if PLATE_RECOGNITION_ENABLED:
+            # Both branches run on the same source image. Plate OCR must see the
+            # raw frame, but its rendered frame otherwise replaces the vehicle
+            # annotations. Keep only pixels changed by the vehicle branch so the
+            # final display can show both overlays without feeding boxes into OCR.
+            changed = cv2.cvtColor(cv2.absdiff(frame, raw), cv2.COLOR_BGR2GRAY)
+            _, vehicle_overlay_mask = cv2.threshold(changed, 0, 255, cv2.THRESH_BINARY)
         people = take_person_boxes(camera_id)
     else:
         vehicles, people = [], []
@@ -96,10 +104,12 @@ def annotate(frame, kind, camera_id):
         plate_frame, plates = annotate_plate_frame(raw, camera_id)
     else:
         plate_frame, plates = frame, []
+    if vehicle_overlay_mask is not None:
+        cv2.copyTo(frame, vehicle_overlay_mask, plate_frame)
     if people:
         from privacy import enabled, pixelate_person_boxes
         if enabled(): pixelate_person_boxes(plate_frame, people)
-    # Plate cameras prioritize plate overlays; observations retain both model outputs.
+    # Plate cameras retain both plate and vehicle overlays; OCR used the raw frame.
     return plate_frame, plates + vehicles
 
 
